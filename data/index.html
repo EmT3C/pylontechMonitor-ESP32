@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Pylontech Monitor</title>
+  <style>
+    :root{
+      --bg:#0b1220;--card:#0f172a;--ink:#e7eaf0;--muted:#a9b4cc;--accent:#2563eb;--ok:#16a34a;--warn:#f59e0b;--bad:#ef4444;--line:#2b3b59
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+    header{display:flex;align-items:center;gap:14px;padding:16px 20px;border-bottom:1px solid var(--line)}
+    header h1{font-size:18px;margin:0}
+    header small{color:var(--muted)}
+    .wrap{max-width:1100px;margin:0 auto;padding:16px}
+    .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+    .stat h3{margin:0 0 6px;font-size:13px;color:var(--muted);font-weight:600}
+    .stat .val{font-size:22px;font-weight:700}
+    .row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+    .pill{padding:4px 8px;border-radius:999px;border:1px solid var(--line);font-size:12px}
+    .pill.ok{border-color:#24523a;background:#14281e;color:#a7f3d0}
+    .pill.warn{border-color:#7a5108;background:#2a1e0b;color:#fde68a}
+    .pill.bad{border-color:#7a1a1a;background:#2a0f0f;color:#fecaca}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}
+    th{color:var(--muted);font-weight:600}
+    .right{text-align:right}
+    .muted{color:var(--muted)}
+    /* Konsole */
+    .console-card h3{margin:0 0 8px}
+    .bar{display:flex;gap:8px;margin:8px 0}
+    .input{flex:1;padding:10px;border:1px solid var(--line);border-radius:10px;background:#0b1220;color:var(--ink)}
+    .btn{padding:10px 14px;border:0;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    pre{white-space:pre-wrap;background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:10px;min-height:160px;max-height:50vh;overflow:auto}
+    .quick{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+    .chip{border:1px solid var(--line);background:#0b1220;color:var(--ink);padding:6px 10px;border-radius:999px;font-size:12px;cursor:pointer}
+    .chip:hover{border-color:var(--accent)}
+    a{color:#93c5fd;text-decoration:none}
+    .foot{margin-top:10px;color:var(--muted);font-size:12px}
+  </style>
+</head>
+<body>
+<header>
+  <h1>Pylontech Monitor</h1>
+  <small id="statusTxt" class="muted">Verbinde…</small>
+</header>
+
+<div class="wrap">
+
+  <!-- Top KPIs -->
+  <section class="grid" id="kpis">
+    <div class="card stat">
+      <h3>Gesamt-SoC</h3>
+      <div class="row">
+        <div class="val" id="soc">– %</div>
+        <span id="statePill" class="pill">–</span>
+      </div>
+    </div>
+    <div class="card stat">
+      <h3>DC-Leistung</h3>
+      <div class="val" id="pdc">– W</div>
+      <small class="muted">P = U·I (Vorzeichen: +laden / −entladen)</small>
+    </div>
+    <div class="card stat">
+      <h3>AC-Leistung (est.)</h3>
+      <div class="val" id="pac">– W</div>
+      <small class="muted">Heuristik wie Firmware</small>
+    </div>
+    <div class="card stat">
+      <h3>Spannung</h3>
+      <div class="val" id="u">– V</div>
+    </div>
+    <div class="card stat">
+      <h3>Strom</h3>
+      <div class="val" id="i">– A</div>
+    </div>
+    <div class="card stat">
+      <h3>System-Temp Ø</h3>
+      <div class="val" id="tsys">– °C</div>
+      <small id="tsysHL" class="muted"></small>
+    </div>
+  </section>
+
+  <!-- Pro Batterie -->
+  <section class="card" style="margin-top:12px">
+    <div class="row" style="margin-bottom:8px">
+      <h3 style="margin:0">Batterien</h3>
+      <small class="muted" id="batCount">–</small>
+    </div>
+    <div style="overflow:auto">
+      <table id="batTable">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>SoC</th>
+            <th>Spannung</th>
+            <th>Strom</th>
+            <th>Temp</th>
+            <th>Zell-U (min/max)</th>
+            <th>Zell-T (min/max)</th>
+            <th>State</th>
+          </tr>
+        </thead>
+        <tbody id="batBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Konsole -->
+  <section class="card console-card" style="margin-top:12px">
+    <h3>Web-Konsole</h3>
+    <div class="bar">
+      <input id="cmd" class="input" type="text" placeholder='Befehl (z. B. "pwr", "pwrsys", "soh 1")' autofocus>
+      <button id="sendBtn" class="btn" onclick="sendCmd()">Senden</button>
+    </div>
+    <div class="quick">
+      <button class="chip" onclick="run('pwr')">pwr</button>
+      <button class="chip" onclick="run('pwrsys')">pwrsys</button>
+      <button class="chip" onclick="run('soh 1')">soh 1</button>
+      <button class="chip" onclick="run('soh 2')">soh 2</button>
+      <button class="chip" onclick="run('soh 3')">soh 3</button>
+      <button class="chip" onclick="run('soh 4')">soh 4</button>
+      <button class="chip" onclick="run('soh 5')">soh 5</button>
+      <button class="chip" onclick="run('soh 6')">soh 6</button>
+      <button class="chip" onclick="run('soh 7')">soh 7</button>
+    </div>
+    <pre id="cmdOut"></pre>
+    <div class="foot">Die Firmware muss <code>POST /api/cmd</code> (Body=Text) oder <code>GET /cmd?code=...</code> anbieten.</div>
+  </section>
+
+  <!-- Systeminfos -->
+  <section class="grid" style="margin-top:12px">
+    <div class="card">
+      <h3 style="margin:0 0 8px">System</h3>
+      <div class="row"><span class="muted">SOH</span><span id="soh">– %</span></div>
+      <div class="row"><span class="muted">RC</span><span id="rc">– mAh</span></div>
+      <div class="row"><span class="muted">FCC</span><span id="fcc">– mAh</span></div>
+      <div class="row"><span class="muted">Diag</span><span id="diag">–</span></div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+/* --------- helpers --------- */
+const $ = s => document.querySelector(s);
+const fmt = (v, d=0) => (isFinite(v) ? Number(v).toFixed(d) : '–');
+
+function setPill(el, txt){
+  el.textContent = txt;
+  el.className = 'pill';
+  const t = (txt||'').toLowerCase();
+  if (t.includes('charge')) el.classList.add('ok');
+  else if (t.includes('dischg')) el.classList.add('warn');
+  else if (t.includes('alarm')) el.classList.add('bad');
+}
+
+/** AC-Heuristik wie im Sketch */
+function estAC(pdc){
+  if (!isFinite(pdc) || pdc === 0) return 0;
+  if (pdc < 0){
+    if (pdc < -1000) return pdc * 0.94;
+    if (pdc < -600)  return pdc * 0.90;
+    return pdc * 0.87;
+  } else {
+    if (pdc > 1000) return pdc * 1.06;
+    if (pdc > 600)  return pdc * 1.10;
+    return pdc * 1.13;
+  }
+}
+
+/* --------- polling of API --------- */
+/* Erwartete Endpunkte in Firmware:
+   GET /api/stack  -> {soc, temp(mC), currentDC(mA), avgVoltage(mV), baseState, batteryCount, batts:[{...}]}
+   GET /api/system -> {soc, soh, voltage(mV), current(mA), temp_avg/low/high (mC), volt_avg/low/high (mV), rc, fcc}
+   GET /diag       -> plain text (optional)
+*/
+
+async function fetchJson(url){
+  const r = await fetch(url, {cache:'no-store'});
+  if (!r.ok) throw new Error(url+': '+r.status);
+  return r.json();
+}
+
+async function refreshStack(){
+  try{
+    const s = await fetchJson('/api/stack');
+    $('#statusTxt').textContent = 'Verbunden';
+    // KPIs
+    $('#soc').textContent = fmt(s.soc,0) + ' %';
+    $('#u').textContent   = fmt((s.avgVoltage||0)/1000,3) + ' V';
+    $('#i').textContent   = fmt((s.currentDC||0)/1000,3) + ' A';
+
+    const pdc = ((s.currentDC||0)/1000) * ((s.avgVoltage||0)/1000);
+    $('#pdc').textContent = fmt(pdc,0) + ' W';
+    $('#pac').textContent = fmt(estAC(pdc),0) + ' W';
+
+    setPill($('#statePill'), s.baseState || '–');
+
+    // Batterien
+    $('#batCount').textContent = (s.batteryCount ?? 0) + ' aktiv';
+    const tb = $('#batBody');
+    tb.innerHTML = '';
+
+    const batts = Array.isArray(s.batts) ? s.batts : [];
+    batts.forEach((b, idx)=>{
+      if (!b || !b.isPresent) return;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${idx+1}</td>
+        <td>${fmt(b.soc,0)} %</td>
+        <td>${fmt((b.voltage||0)/1000,3)} V</td>
+        <td>${fmt((b.current||0)/1000,3)} A</td>
+        <td>${fmt((b.tempr||0)/1000,1)} °C</td>
+        <td>${fmt((b.cellVoltLow||0)/1000,3)} / ${fmt((b.cellVoltHigh||0)/1000,3)} V</td>
+        <td>${fmt((b.cellTempLow||0)/1000,1)} / ${fmt((b.cellTempHigh||0)/1000,1)} °C</td>
+        <td>${b.baseState || '-'}</td>
+      `;
+      tb.appendChild(tr);
+    });
+  }catch(e){
+    $('#statusTxt').textContent = 'Offline';
+    // Seite nicht fluten – still
+  }
+}
+
+async function refreshSystem(){
+  try{
+    const sys = await fetchJson('/api/system');
+    $('#soh').textContent = fmt(sys.soh,0) + ' %';
+    $('#rc').textContent  = fmt(sys.rc,0) + ' mAh';
+    $('#fcc').textContent = fmt(sys.fcc,0) + ' mAh';
+    const tavg = (sys.temp_avg||0)/1000, tmin=(sys.temp_low||0)/1000, tmax=(sys.temp_high||0)/1000;
+    $('#tsys').textContent = fmt(tavg,1) + ' °C';
+    $('#tsysHL').textContent = `min/max: ${fmt(tmin,1)} / ${fmt(tmax,1)} °C`;
+  }catch(e){ /* optional */ }
+}
+
+async function refreshDiag(){
+  try{
+    const r = await fetch('/diag',{cache:'no-store'});
+    $('#diag').textContent = r.ok ? (await r.text()).replace(/\n/g,' | ') : '–';
+  }catch(e){
+    $('#diag').textContent = '–';
+  }
+}
+
+setInterval(refreshStack, 2000);
+setInterval(refreshSystem, 5000);
+setInterval(refreshDiag,   10000);
+refreshStack(); refreshSystem(); refreshDiag();
+
+/* --------- Web-Konsole --------- */
+let lastCmd = '';
+const out = $('#cmdOut');
+const inp = $('#cmd');
+const btn = $('#sendBtn');
+
+async function sendCmd(){
+  const code = (inp.value||'').trim();
+  if(!code) return;
+  lastCmd = code;
+  btn.disabled = true;
+
+  async function post(){
+    return fetch('/api/cmd', {method:'POST', headers:{'Content-Type':'text/plain'}, body:code});
+  }
+  async function get(){
+    return fetch('/cmd?code='+encodeURIComponent(code));
+  }
+
+  try{
+    let res = await post();
+    if(!res.ok) res = await get();
+    const text = await res.text();
+    out.textContent = `$ ${code}\n${text}\n`;
+    out.scrollTop = out.scrollHeight;
+  }catch(e){
+    out.textContent = `$ ${code}\n[ERROR] ${e && e.message ? e.message : e}\n`;
+  }finally{
+    btn.disabled = false;
+    inp.focus(); inp.select();
+  }
+}
+function run(cmd){ inp.value = cmd; sendCmd(); }
+
+inp.addEventListener('keydown', ev=>{
+  if(ev.key==='Enter') sendCmd();
+  if(ev.key==='ArrowUp'){ inp.value = lastCmd; setTimeout(()=>inp.setSelectionRange(inp.value.length, inp.value.length),0); }
+});
+</script>
+</body>
+</html>
