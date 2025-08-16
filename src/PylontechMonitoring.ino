@@ -20,6 +20,47 @@ systemData   g_systemStack{};
 #include "WebUI.h"               // WebUI::init(server, link, stack, system, rawBuf, log)
 #include "MQTTHandler.h"         // Klasse MQTTHandler (mit publishIfConnected etc.)
 
+// --- LED-Statushelfer ---
+namespace Led {
+  static bool s_ota = false;
+
+  inline void writeRaw(bool on) {
+    digitalWrite(LED_PIN,
+      LED_ACTIVE_LOW ? (on ? LOW : HIGH) : (on ? HIGH : LOW));
+  }
+  void begin() {
+    pinMode(LED_PIN, OUTPUT);
+    writeRaw(false); // aus
+  }
+  void setOTA(bool on) { s_ota = on; }
+
+  // mode durch Zustände bestimmt: OTA, WiFi, MQTT, Alarm, sonst Heartbeat
+  void tick(bool wifiOK, bool mqttOK, bool alarm) {
+    const unsigned long now = millis();
+
+    if (s_ota) {                // sehr schnelles Blinken bei OTA
+      writeRaw(((now / 80) % 2) != 0);
+      return;
+    }
+    if (!wifiOK) {              // sehr schnelles Blinken: keine WLAN-Verbindung
+      writeRaw(((now / 150) % 2) != 0);
+      return;
+    }
+    if (wifiOK && !mqttOK) {    // langsames Blinken: WLAN ok, MQTT nicht verbunden
+      writeRaw(((now / 500) % 2) != 0);
+      return;
+    }
+    if (alarm) {                // Dreifach-Flash, dann Pause
+      unsigned long ph = now % 1600;
+      bool on = (ph < 100) || (ph >= 200 && ph < 300) || (ph >= 400 && ph < 500);
+      writeRaw(on);
+      return;
+    }
+    // Heartbeat: kurzer Blitz alle 2s, wenn alles ok
+    writeRaw((now % 2000) < 40);
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Globale Objekte
 
@@ -170,18 +211,30 @@ void setup() {
   // Mit bestem AP verbinden (BSSID-basiert)
   connectToBestAP(WIFI_SSID, WIFI_PASS);
 
-  // OTA
-  ArduinoOTA.setHostname(WIFI_HOSTNAME);
-  ArduinoOTA
-    .onStart([](){ Serial.println("OTA start"); })
-    .onEnd([](){ Serial.println("\nOTA end"); })
-    .onProgress([](unsigned int p, unsigned int t){
-      Serial.printf("OTA %u%%\r", (p*100)/t);
-    })
-    .onError([](ota_error_t e){ Serial.printf("OTA Error[%u]\n", e); });
-  ArduinoOTA.begin();
-  Serial.printf("OTA ready at %s (%s)\n",
-                WIFI_HOSTNAME, WiFi.localIP().toString().c_str());
+  Led::begin();
+
+ // OTA
+ArduinoOTA.setHostname(WIFI_HOSTNAME);
+ArduinoOTA
+  .onStart([](){
+    Led::setOTA(true);                 // NEU: LED schnelles Blinken
+    Serial.println("OTA start");
+  })
+  .onEnd([](){
+    Led::setOTA(false);                // NEU: LED wieder normal
+    Serial.println("\nOTA end");
+  })
+  .onProgress([](unsigned int p, unsigned int t){
+    Serial.printf("OTA %u%%\r", (p*100)/t);
+  })
+  .onError([](ota_error_t e){
+    Led::setOTA(false);                // NEU: sicherheitshalber zurücksetzen
+    Serial.printf("OTA Error[%u]\n", e);
+  });
+
+ArduinoOTA.begin();
+Serial.printf("OTA ready at %s (%s)\n",
+              WIFI_HOSTNAME, WiFi.localIP().toString().c_str());
 
   // mDNS
   if (MDNS.begin(WIFI_HOSTNAME)) {
@@ -258,6 +311,16 @@ void loop() {
   // kümmert sich um Reconnect + Discovery bei (Re-)Connect
   MQTTHandler::loop();
 #endif
+  
+ // LED-Status berechnen
+  bool wifiOK = (WiFi.status() == WL_CONNECTED);
+  bool mqttOK = false;
+  #ifdef ENABLE_MQTT
+    mqttOK = mqttClient.connected();
+  #endif
+    bool alarm = (strcmp(g_stack.baseState, "Alarm!") == 0);
+
+    Led::tick(wifiOK, mqttOK, alarm);
 
   // Batterie pollen (leichtes Rate-Limit via millis)
   static uint32_t lastPoll = 0;
