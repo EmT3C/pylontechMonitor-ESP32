@@ -42,3 +42,11 @@
 #define USING_ESP32_TIMERINTERRUPT   true
 #define TIMER_BASE_CLK               80000000  // 80 MHz
 #define TIMER_DIVIDER                80        // -> 1 MHz
+
+// --- LED-Konfiguration ---
+#ifndef LED_PIN
+#define LED_PIN 2           // ggf. an dein Board anpassen
+#endif
+#ifndef LED_ACTIVE_LOW
+#define LED_ACTIVE_LOW 1    // 1 = LED leuchtet bei LOW, 0 = bei HIGH
+#endif
