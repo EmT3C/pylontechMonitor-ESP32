@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Pylontech Monitor</title>
+  <style>
+    :root{
+      --bg:#0b1220;--card:#0f172a;--ink:#e7eaf0;--muted:#a9b4cc;--accent:#2563eb;--ok:#16a34a;--warn:#f59e0b;--bad:#ef4444;--line:#2b3b59
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+    header{display:flex;align-items:center;gap:14px;padding:16px 20px;border-bottom:1px solid var(--line)}
+    header h1{font-size:18px;margin:0}
+    header small{color:var(--muted)}
+    .wrap{max-width:1200px;margin:0 auto;padding:16px}
+    .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+    .stat h3{margin:0 0 6px;font-size:13px;color:var(--muted);font-weight:600}
+    .stat .val{font-size:22px;font-weight:700}
+    .row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+    .pill{padding:4px 8px;border-radius:999px;border:1px solid var(--line);font-size:12px}
+    .pill.ok{border-color:#24523a;background:#14281e;color:#a7f3d0}
+    .pill.warn{border-color:#7a5108;background:#2a1e0b;color:#fde68a}
+    .pill.bad{border-color:#7a1a1a;background:#2a0f0f;color:#fecaca}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}
+    th{color:var(--muted);font-weight:600}
+    .muted{color:var(--muted)}
+    .console-card h3{margin:0 0 8px}
+    .bar{display:flex;gap:8px;margin:8px 0}
+    .input{flex:1;padding:10px;border:1px solid var(--line);border-radius:10px;background:#0b1220;color:var(--ink)}
+    .btn{padding:10px 14px;border:0;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    pre{white-space:pre-wrap;background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:10px;min-height:160px;max-height:50vh;overflow:auto}
+    .quick{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+    .chip{border:1px solid var(--line);background:#0b1220;color:var(--ink);padding:6px 10px;border-radius:999px;font-size:12px;cursor:pointer}
+    .chip:hover{border-color:var(--accent)}
+    a{color:#93c5fd;text-decoration:none}
+    .foot{margin-top:10px;color:var(--muted);font-size:12px}
+    .section-title{margin:0 0 10px;font-size:15px}
+    .subgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  </style>
+</head>
+<body>
+<header>
+  <h1>Pylontech Monitor</h1>
+  <small id="statusTxt" class="muted">Verbinde…</small>
+</header>
+
+<div class="wrap">
+
+  <section class="grid" id="kpis">
+    <div class="card stat">
+      <h3>Gesamt-SoC</h3>
+      <div class="row">
+        <div class="val" id="soc">– %</div>
+        <span id="statePill" class="pill">–</span>
+      </div>
+    </div>
+    <div class="card stat">
+      <h3>DC-Leistung</h3>
+      <div class="val" id="pdc">– W</div>
+      <small class="muted">P = U·I (Vorzeichen: +laden / −entladen)</small>
+    </div>
+    <div class="card stat">
+      <h3>AC-Leistung (est.)</h3>
+      <div class="val" id="pac">– W</div>
+      <small class="muted">Heuristik wie Firmware</small>
+    </div>
+    <div class="card stat">
+      <h3>Spannung</h3>
+      <div class="val" id="u">– V</div>
+    </div>
+    <div class="card stat">
+      <h3>Strom</h3>
+      <div class="val" id="i">– A</div>
+    </div>
+    <div class="card stat">
+      <h3>System-Temp Ø</h3>
+      <div class="val" id="tsys">– °C</div>
+      <small id="tsysHL" class="muted"></small>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:12px">
+    <div class="row" style="margin-bottom:8px">
+      <h3 style="margin:0">Batterien</h3>
+      <small class="muted" id="batCount">–</small>
+    </div>
+    <div style="overflow:auto">
+      <table id="batTable">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>SoC</th>
+            <th>Spannung</th>
+            <th>Strom</th>
+            <th>Temp</th>
+            <th>Zell-U (min/max)</th>
+            <th>Zell-T (min/max)</th>
+            <th>Cycle Times</th>
+            <th>State</th>
+          </tr>
+        </thead>
+        <tbody id="batBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="subgrid" style="margin-top:12px">
+    <div class="card">
+      <h3 class="section-title">System</h3>
+      <div class="row"><span class="muted">System-Status</span><span id="sysState">–</span></div>
+      <div class="row"><span class="muted">Alarmstatus</span><span id="sysAlarm">–</span></div>
+      <div class="row"><span class="muted">System-SOC</span><span id="sysSoc">– %</span></div>
+      <div class="row"><span class="muted">SOH</span><span id="soh">– %</span></div>
+      <div class="row"><span class="muted">System-Spannung</span><span id="sysVoltage">– V</span></div>
+      <div class="row"><span class="muted">System-Strom</span><span id="sysCurrent">– A</span></div>
+      <div class="row"><span class="muted">RC</span><span id="rc">– mAh</span></div>
+      <div class="row"><span class="muted">FCC</span><span id="fcc">– mAh</span></div>
+      <div class="row"><span class="muted">Diag</span><span id="diag">–</span></div>
+      <div class="row" style="margin-top:10px">
+        <button id="restartBtn" class="btn" style="background:#ef4444" onclick="restartEsp()">ESP neu starten</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="section-title">Empfohlene Werte (BMS)</h3>
+      <div class="row"><span class="muted">Ladespannung</span><span id="recChgVoltage">– V</span></div>
+      <div class="row"><span class="muted">Entladespannung</span><span id="recDsgVoltage">– V</span></div>
+      <div class="row"><span class="muted">Ladestrom</span><span id="recChgCurrent">– A</span></div>
+      <div class="row"><span class="muted">Entladestrom</span><span id="recDsgCurrent">– A</span></div>
+    </div>
+
+    <div class="card">
+      <h3 class="section-title">Empfohlene Werte (System)</h3>
+      <div class="row"><span class="muted">Ladespannung</span><span id="sysRecChgVoltage">– V</span></div>
+      <div class="row"><span class="muted">Entladespannung</span><span id="sysRecDsgVoltage">– V</span></div>
+      <div class="row"><span class="muted">Ladestrom</span><span id="sysRecChgCurrent">– A</span></div>
+      <div class="row"><span class="muted">Entladestrom</span><span id="sysRecDsgCurrent">– A</span></div>
+    </div>
+
+    <div class="card">
+      <h3 class="section-title">STAT Debug</h3>
+      <div class="row"><span class="muted">Aktueller Slot</span><span id="statDbgIdx">–</span></div>
+      <div class="row"><span class="muted">Max Slots</span><span id="statDbgMax">–</span></div>
+      <div class="row"><span class="muted">Erkannt / Highest</span><span id="statDbgDetected">–</span></div>
+      <div class="row"><span class="muted">Initiallauf</span><span id="statDbgInitial">–</span></div>
+      <div class="row"><span class="muted">In Progress</span><span id="statDbgBusy">–</span></div>
+      <div class="row"><span class="muted">Letztes Kommando</span><span id="statDbgCmd">–</span></div>
+      <div class="row"><span class="muted">Letztes Ergebnis</span><span id="statDbgMsg">–</span></div>
+      <div class="row"><span class="muted">Cycle Times</span><span id="statDbgCycle">–</span></div>
+      <div class="row"><span class="muted">Letzter Erfolg</span><span id="statDbgOk">–</span></div>
+    </div>
+  </section>
+
+  <section class="card console-card" style="margin-top:12px">
+    <h3>Web-Konsole</h3>
+    <div class="bar">
+      <input id="cmd" class="input" type="text" placeholder='Befehl (z. B. "pwr", "pwrsys", "stat 1")' autofocus>
+      <button id="sendBtn" class="btn" onclick="sendCmd()">Senden</button>
+    </div>
+    <div class="quick">
+      <button class="chip" onclick="run('pwr')">pwr</button>
+      <button class="chip" onclick="run('pwrsys')">pwrsys</button>
+      <button class="chip" onclick="run('help')">help</button>
+      <button class="chip" onclick="run('stat 1')">stat 1</button>
+      <button class="chip" onclick="run('stat 2')">stat 2</button>
+      <button class="chip" onclick="run('stat 3')">stat 3</button>
+      <button class="chip" onclick="run('stat 4')">stat 4</button>
+      <button class="chip" onclick="run('stat 5')">stat 5</button>
+      <button class="chip" onclick="run('stat 6')">stat 6</button>
+    </div>
+    <pre id="cmdOut"></pre>
+    <div class="foot">Die Firmware muss <code>POST /api/cmd</code> (Body=Text) oder <code>GET /cmd?code=...</code> anbieten.</div>
+  </section>
+
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const fmt = (v, d=0) => (isFinite(v) ? Number(v).toFixed(d) : '–');
+
+function setPill(el, txt){
+  el.textContent = txt;
+  el.className = 'pill';
+  const t = (txt || '').toLowerCase();
+  if (t.includes('charge')) el.classList.add('ok');
+  else if (t.includes('dischg')) el.classList.add('warn');
+  else if (t.includes('alarm')) el.classList.add('bad');
+}
+
+function estAC(pdc){
+  if (!isFinite(pdc) || pdc === 0) return 0;
+  if (pdc < 0){
+    if (pdc < -1000) return pdc * 0.94;
+    if (pdc < -600)  return pdc * 0.90;
+    return pdc * 0.87;
+  } else {
+    if (pdc > 1000) return pdc * 1.06;
+    if (pdc > 600)  return pdc * 1.10;
+    return pdc * 1.13;
+  }
+}
+
+async function fetchJson(url){
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error(url + ': ' + r.status);
+  return r.json();
+}
+
+function renderStack(s){
+  $('#soc').textContent = fmt(s.soc,0) + ' %';
+  $('#u').textContent   = fmt((s.avgVoltage||0)/1000,3) + ' V';
+  $('#i').textContent   = fmt((s.currentDC||0)/1000,3) + ' A';
+
+  const pdc = ((s.currentDC||0)/1000) * ((s.avgVoltage||0)/1000);
+  $('#pdc').textContent = fmt(pdc,0) + ' W';
+  $('#pac').textContent = fmt(estAC(pdc),0) + ' W';
+
+  setPill($('#statePill'), s.baseState || '–');
+
+  $('#batCount').textContent = (s.batteryCount ?? 0) + ' aktiv';
+  const tb = $('#batBody');
+  tb.innerHTML = '';
+
+  const batts = Array.isArray(s.batts) ? s.batts : [];
+  batts.forEach((b, idx)=>{
+    const vMin = (b.cellVoltLow || 0) / 1000;
+    const vMax = (b.cellVoltHigh || 0) / 1000;
+    const vDiffmV = (b.cellVoltHigh || 0) - (b.cellVoltLow || 0);
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${b.idx || (idx + 1)}</td>
+      <td>${fmt(b.soc,0)} %</td>
+      <td>${fmt((b.voltage||0)/1000,3)} V</td>
+      <td>${fmt((b.current||0)/1000,3)} A</td>
+      <td>${fmt((b.tempr||0)/1000,1)} °C</td>
+      <td>${fmt(vMin,3)} / ${fmt(vMax,3)} V (Δ ${fmt(vDiffmV,0)} mV)</td>
+      <td>${fmt((b.cellTempLow||0)/1000,1)} / ${fmt((b.cellTempHigh||0)/1000,1)} °C</td>
+      <td>${fmt(b.cycleTimes,0)}</td>
+      <td>${b.baseState || '-'}</td>
+    `;
+    tb.appendChild(tr);
+  });
+}
+
+function renderSystem(sys){
+  $('#sysState').textContent   = sys.state || '–';
+  $('#sysAlarm').textContent   = sys.alarmState || '–';
+  $('#sysSoc').textContent     = fmt(sys.soc,0) + ' %';
+  $('#soh').textContent        = fmt(sys.soh,0) + ' %';
+  $('#sysVoltage').textContent = fmt((sys.voltage||0)/1000,3) + ' V';
+  $('#sysCurrent').textContent = fmt((sys.current||0)/1000,3) + ' A';
+  $('#rc').textContent         = fmt(sys.rc,0) + ' mAh';
+  $('#fcc').textContent        = fmt(sys.fcc,0) + ' mAh';
+
+  const tavg = (sys.temp_avg||0)/1000;
+  const tmin = (sys.temp_low||0)/1000;
+  const tmax = (sys.temp_high||0)/1000;
+  $('#tsys').textContent = fmt(tavg,1) + ' °C';
+  $('#tsysHL').textContent = `min/max: ${fmt(tmin,1)} / ${fmt(tmax,1)} °C`;
+
+  $('#recChgVoltage').textContent    = fmt((sys.rec_chg_voltage||0)/1000,3) + ' V';
+  $('#recDsgVoltage').textContent    = fmt((sys.rec_dsg_voltage||0)/1000,3) + ' V';
+  $('#recChgCurrent').textContent    = fmt((sys.rec_chg_current||0)/1000,3) + ' A';
+  $('#recDsgCurrent').textContent    = fmt((sys.rec_dsg_current||0)/1000,3) + ' A';
+
+  $('#sysRecChgVoltage').textContent = fmt((sys.sys_rec_chg_voltage||0)/1000,3) + ' V';
+  $('#sysRecDsgVoltage').textContent = fmt((sys.sys_rec_dsg_voltage||0)/1000,3) + ' V';
+  $('#sysRecChgCurrent').textContent = fmt((sys.sys_rec_chg_current||0)/1000,3) + ' A';
+  $('#sysRecDsgCurrent').textContent = fmt((sys.sys_rec_dsg_current||0)/1000,3) + ' A';
+}
+
+function renderStatDebug(d){
+  $('#statDbgIdx').textContent = fmt(d.currentIdx, 0);
+  $('#statDbgMax').textContent = fmt(d.maxBat, 0);
+  $('#statDbgDetected').textContent = `${fmt(d.detected, 0)} / ${fmt(d.highestPresentIdx, 0)}`;
+  $('#statDbgInitial').textContent = d.initialRun ? 'ja' : 'nein';
+  $('#statDbgBusy').textContent = d.inProgress ? 'ja' : 'nein';
+  $('#statDbgCmd').textContent = d.lastCommand || '–';
+  $('#statDbgMsg').textContent = d.lastMessage || '–';
+  $('#statDbgCycle').textContent = fmt(d.lastCycleTimes, 0);
+  $('#statDbgOk').textContent = d.lastSuccess
+    ? `ok @ ${fmt((d.lastSuccessMs || 0) / 1000, 0)}s`
+    : (d.lastTimedOut ? 'timeout' : (d.lastParseFailed ? 'parse failed' : '–'));
+}
+
+let statusFailures = 0;
+let stackInFlight = false;
+let systemInFlight = false;
+
+function markOnline(){
+  statusFailures = 0;
+  $('#statusTxt').textContent = 'Verbunden';
+}
+
+function markRequestFailure(){
+  statusFailures++;
+  if (statusFailures >= 2) {
+    $('#statusTxt').textContent = 'Offline';
+  }
+}
+
+async function refreshStack(){
+  if (stackInFlight) return;
+  stackInFlight = true;
+
+  try{
+    const s = await fetchJson('/api/stack');
+    markOnline();
+    renderStack(s);
+  }catch(e){
+    markRequestFailure();
+  }finally{
+    stackInFlight = false;
+  }
+}
+
+async function refreshSystem(){
+  if (systemInFlight) return;
+  systemInFlight = true;
+
+  try{
+    const sys = await fetchJson('/api/system');
+    markOnline();
+    renderSystem(sys);
+  }catch(e){
+    markRequestFailure();
+  }finally{
+    systemInFlight = false;
+  }
+}
+
+async function refreshStatDebug(){
+  try{
+    const dbg = await fetchJson('/api/stat_debug');
+    renderStatDebug(dbg);
+  }catch(e){
+  }
+}
+
+async function refreshDiag(){
+  try{
+    const r = await fetch('/diag', { cache: 'no-store' });
+    $('#diag').textContent = r.ok ? (await r.text()).replace(/\n/g, ' | ') : '–';
+  }catch(e){
+    $('#diag').textContent = '–';
+  }
+}
+
+setInterval(refreshStack, 3000);
+setInterval(refreshSystem, 5000);
+setInterval(refreshStatDebug, 3000);
+setInterval(refreshDiag, 10000);
+refreshStack();
+refreshSystem();
+refreshStatDebug();
+refreshDiag();
+
+let lastCmd = '';
+const out = $('#cmdOut');
+const inp = $('#cmd');
+const btn = $('#sendBtn');
+
+async function sendCmd(){
+  const code = (inp.value || '').trim();
+  if (!code) return;
+  lastCmd = code;
+  btn.disabled = true;
+
+  async function post(){
+    return fetch('/api/cmd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: code
+    });
+  }
+
+  async function get(){
+    return fetch('/cmd?code=' + encodeURIComponent(code));
+  }
+
+  try{
+    let res = await post();
+    if (!res.ok) res = await get();
+    const text = await res.text();
+    out.textContent = `$ ${code}\n${text}\n`;
+    out.scrollTop = out.scrollHeight;
+  }catch(e){
+    out.textContent = `$ ${code}\n[ERROR] ${e && e.message ? e.message : e}\n`;
+  }finally{
+    btn.disabled = false;
+    inp.focus();
+    inp.select();
+  }
+}
+
+function run(cmd){
+  inp.value = cmd;
+  sendCmd();
+}
+
+inp.addEventListener('keydown', ev => {
+  if (ev.key === 'Enter') sendCmd();
+  if (ev.key === 'ArrowUp') {
+    inp.value = lastCmd;
+    setTimeout(() => inp.setSelectionRange(inp.value.length, inp.value.length), 0);
+  }
+});
+
+async function restartEsp(){
+  if (!confirm('ESP wirklich neu starten?')) return;
+
+  const restartBtn = $('#restartBtn');
+  if (restartBtn) restartBtn.disabled = true;
+
+  try {
+    await fetch('/api/restart', {
+      method: 'POST',
+      cache: 'no-store'
+    });
+
+    $('#statusTxt').textContent = 'Neustart…';
+    setTimeout(() => location.reload(), 5000);
+  } catch (e) {
+    alert('Neustart fehlgeschlagen');
+    if (restartBtn) restartBtn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

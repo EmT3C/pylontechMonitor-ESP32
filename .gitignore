@@ -1,0 +1,5 @@
+.pio
+.platformio-core
+.DS_Store
+.vscode/
+include/Config.local.h
