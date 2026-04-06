@@ -1,19 +1,30 @@
 # Pylontech ESP32 Monitor
 
-ESP32-based Pylontech battery monitor with:
-- Web UI
-- OTA updates
-- MQTT publishing
-- LittleFS-hosted frontend
+Deutschsprachiger ESP32-Monitor fuer Pylontech-Batterien mit:
+- Web-UI
+- OTA-Updates
+- MQTT-Anbindung
+- Frontend aus LittleFS
 
-## Local configuration
+Kurzbeschreibung fuer GitHub:
+Deutschsprachiger ESP32-Monitor fuer Pylontech-Batterien mit Web-UI, OTA, MQTT und LittleFS-Frontend.
 
-This repository does not store live credentials.
+Empfohlene GitHub-Topics:
+`esp32`, `pylontech`, `battery-monitor`, `mqtt`, `arduino`, `platformio`, `littlefs`, `ota`, `webui`, `home-assistant`
 
-1. Copy `include/Config.local.example.h` to `include/Config.local.h`
-2. Fill in your Wi-Fi, MQTT, and network settings
+## Hinweis zur Sprache
 
-`include/Config.local.h` is ignored by Git and stays local on your machine.
+Dieses Release ist bewusst auf Deutsch gehalten.
+Auf dem eingesetzten System ist kein Sprachpaket installiert, daher sind Weboberflaeche, Kommentare und Projektdokumentation in deutscher Sprache gepflegt.
+
+## Lokale Konfiguration
+
+Dieses Repository enthaelt keine echten Zugangsdaten.
+
+1. `include/Config.local.example.h` nach `include/Config.local.h` kopieren
+2. WLAN-, MQTT- und Netzwerkeinstellungen lokal eintragen
+
+`include/Config.local.h` ist per Git ausgeschlossen und bleibt nur auf dem Geraet bzw. der lokalen Entwicklungsumgebung.
 
 ## Build
 
@@ -21,9 +32,9 @@ This repository does not store live credentials.
 PLATFORMIO_CORE_DIR=.platformio-core ~/.local/bin/platformio run
 ```
 
-## Upload filesystem
+## LittleFS hochladen
 
-If you changed the web UI in `data/`, upload LittleFS too:
+Wenn Dateien in `data/` geaendert wurden, sollte anschliessend auch das LittleFS-Dateisystem hochgeladen werden:
 
 ```bash
 PLATFORMIO_CORE_DIR=.platformio-core ~/.local/bin/platformio run -t uploadfs
