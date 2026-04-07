@@ -10,6 +10,7 @@ static WebServer*          s_server = nullptr;
 static BatteryLink*        s_link   = nullptr;
 static batteryStack*       s_stack  = nullptr;
 static systemData*         s_system = nullptr;
+static dailyEnergyData*    s_energy = nullptr;
 static statDebugData*      s_statDbg = nullptr;
 static char*               s_rawBuf = nullptr;
 static size_t              s_rawLen = 0;
@@ -75,6 +76,12 @@ static void sendJsonStack() {
     doc["dc_W"]          = (long)s_stack->getPowerDC();
     doc["ac_W_est"]      = (long)s_stack->getEstPowerAc();
     doc["isNormal"]      = s_stack->isNormal();
+    if (s_energy) {
+      doc["chargeKWhToday"]    = s_energy->chargeKWhToday;
+      doc["dischargeKWhToday"] = s_energy->dischargeKWhToday;
+      doc["energyTimeSynced"]  = s_energy->timeSynced;
+      doc["currentEpoch"]      = s_energy->currentEpoch;
+    }
 
     // Legacy-/Kompatibilitätsfelder
     doc["batteryCount"]  = s_stack->batteryCount;
@@ -257,6 +264,17 @@ static void sendJsonStatus() {
     derived["ac_W_est"] = s_stack->getEstPowerAc();
   }
 
+  JsonObject energy = doc.createNestedObject("energy");
+  if (s_energy) {
+    energy["valid"] = s_energy->valid;
+    energy["timeSynced"] = s_energy->timeSynced;
+    energy["lastUpdateMs"] = s_energy->lastUpdateMs;
+    energy["currentEpoch"] = s_energy->currentEpoch;
+    energy["localDayNumber"] = s_energy->localDayNumber;
+    energy["chargeKWhToday"] = s_energy->chargeKWhToday;
+    energy["dischargeKWhToday"] = s_energy->dischargeKWhToday;
+  }
+
   sendJsonDocument(doc);
 }
 
@@ -288,6 +306,7 @@ void WebUI::init(WebServer* server,
                  BatteryLink* link,
                  batteryStack* stk,
                  systemData* sys,
+                 dailyEnergyData* energy,
                  statDebugData* statDbg,
                  char* rawBuf,
                  size_t rawBufLen,
@@ -297,6 +316,7 @@ void WebUI::init(WebServer* server,
   s_link   = link;
   s_stack  = stk;
   s_system = sys;
+  s_energy = energy;
   s_statDbg = statDbg;
   s_rawBuf = rawBuf;
   s_rawLen = rawBufLen;

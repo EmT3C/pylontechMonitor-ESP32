@@ -31,10 +31,16 @@ struct pylonBattery {
 
   bool balancing = false;
 
+  bool stateEquals(const char* expected) const {
+    return std::strcmp(baseState, expected) == 0;
+  }
+
   bool isCharging()    const { return std::strcmp(baseState, "Charge")  == 0; }
   bool isDischarging() const { return std::strcmp(baseState, "Dischg")  == 0; }
   bool isIdle()        const { return std::strcmp(baseState, "Idle")    == 0; }
-  bool isBalancing()   const { return balancing; }
+  bool isBalancing()   const { return balancing || stateEquals("Balance"); }
+  bool isProtect()     const { return stateEquals("Protect"); }
+  bool isAlarm()       const { return stateEquals("Alarm") || stateEquals("Alarm!"); }
 
   bool isNormal() const {
     if (!isCharging() && !isDischarging() && !isIdle() && !isBalancing())
@@ -135,6 +141,16 @@ struct batteryStack {
       else                 return static_cast<long>(p * 1.13);
     }
   }
+};
+
+struct dailyEnergyData {
+  bool valid = false;
+  bool timeSynced = false;
+  unsigned long lastUpdateMs = 0;
+  unsigned long currentEpoch = 0;
+  unsigned long localDayNumber = 0;
+  float chargeKWhToday = 0.0f;
+  float dischargeKWhToday = 0.0f;
 };
 
 #endif // BATTERYSTACK_H

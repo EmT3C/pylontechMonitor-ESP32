@@ -6,7 +6,7 @@
 
 class MQTTHandler {
 public:
-  static void init(PubSubClient* client, batteryStack* stack, systemData* system = nullptr);
+  static void init(PubSubClient* client, batteryStack* stack, systemData* system = nullptr, dailyEnergyData* energy = nullptr);
   static void loop();
   static void publishIfConnected();
   static void publishDiscovery();
@@ -19,6 +19,7 @@ private:
   static PubSubClient* s_client;
   static batteryStack* s_stack;
   static systemData*   s_system;
+  static dailyEnergyData* s_energy;
   static unsigned long s_lastPublishMs;
   static unsigned long s_lastAvailMs;
 };

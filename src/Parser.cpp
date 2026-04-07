@@ -152,7 +152,7 @@ bool Parser::parsePwr(const char* in, batteryStack* out) {
     if (tokCount > 18) strncpy(b.b_v_st, tokens[18], sizeof(b.b_v_st) - 1);
     if (tokCount > 19) strncpy(b.b_t_st, tokens[19], sizeof(b.b_t_st) - 1);
 
-    b.balancing = (strcmp(b.baseState, "Balance") == 0);
+    b.balancing = b.isBalancing();
 
     presentCnt++;
     out->currentDC  += b.current;
@@ -169,12 +169,15 @@ bool Parser::parsePwr(const char* in, batteryStack* out) {
       strcmp(b.b_v_st,       "Normal") == 0 &&
       strcmp(b.b_t_st,       "Normal") == 0;
 
-    if (!subOk)                      alarmCnt++;
+    bool faultState = !subOk || b.isAlarm() || b.isProtect();
+
+    if (faultState)                  alarmCnt++;
+    else if (b.isBalancing())        out->anyBalancing = true;
     else if (b.isCharging())         chargeCnt++;
     else if (b.isDischarging())      dischargeCnt++;
     else if (b.isIdle())             idleCnt++;
 
-    if (b.balancing) out->anyBalancing = true;
+    if (b.isBalancing()) out->anyBalancing = true;
 
     if (s_log) {
       char dbg[200];
@@ -199,12 +202,23 @@ bool Parser::parsePwr(const char* in, batteryStack* out) {
     else                         out->soc = (socLow == 101 ? 0 : (int)socLow);
   }
 
-  if      (alarmCnt > 0)                          strcpy(out->baseState, "Alarm!");
-  else if (out->anyBalancing)                     strcpy(out->baseState, "Balance");
-  else if (out->currentDC >  200)                 strcpy(out->baseState, "Charge");
-  else if (out->currentDC < -200)                 strcpy(out->baseState, "Dischg");
-  else if (idleCnt == presentCnt && presentCnt>0) strcpy(out->baseState, "Idle");
-  else                                            strcpy(out->baseState, "Idle");
+  if (alarmCnt > 0) {
+    strcpy(out->baseState, "Alarm!");
+  } else if (out->anyBalancing) {
+    strcpy(out->baseState, "Balance");
+  } else if (chargeCnt > 0 && dischargeCnt == 0) {
+    strcpy(out->baseState, "Charge");
+  } else if (dischargeCnt > 0 && chargeCnt == 0) {
+    strcpy(out->baseState, "Dischg");
+  } else if (idleCnt == presentCnt && presentCnt > 0) {
+    strcpy(out->baseState, "Idle");
+  } else if (out->currentDC > 200) {
+    strcpy(out->baseState, "Charge");
+  } else if (out->currentDC < -200) {
+    strcpy(out->baseState, "Dischg");
+  } else {
+    strcpy(out->baseState, "Idle");
+  }
 
   out->valid = (presentCnt > 0);
   if (out->valid) out->lastUpdateMs = millis();
@@ -247,6 +261,43 @@ static long readLongAfterMulti(const char* s, std::initializer_list<const char*>
     if (v != LONG_MIN) return v;
   }
   return LONG_MIN;
+}
+
+static bool readWordAfterLabel(const char* s, const char* label, char* out, size_t outSize) {
+  if (!s || !label || !out || outSize == 0) return false;
+
+  const char* p = strstr(s, label);
+  if (!p) return false;
+
+  p = strchr(p, ':');
+  if (!p) return false;
+  ++p;
+
+  while (*p == ' ' || *p == '\t') ++p;
+  if (!*p) return false;
+
+  size_t n = 0;
+  while (*p && *p != '\r' && *p != '\n' && *p != ' ' && *p != '\t' && n < outSize - 1) {
+    out[n++] = *p++;
+  }
+  out[n] = 0;
+  return n > 0;
+}
+
+static bool containsIgnoreCase(const char* text, const char* needle) {
+  if (!text || !needle || !*needle) return false;
+
+  size_t needleLen = strlen(needle);
+  for (const char* p = text; *p; ++p) {
+    size_t i = 0;
+    while (i < needleLen &&
+           p[i] &&
+           tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])) {
+      ++i;
+    }
+    if (i == needleLen) return true;
+  }
+  return false;
 }
 
 bool Parser::parsePwrsys(const char* in, systemData* out) {
@@ -324,58 +375,86 @@ bool Parser::parsePwrsys(const char* in, systemData* out) {
   matched++;
 }
 
-if ((v = readLongAfterMulti(in, {"system Recommend dsg voltage"})) != LONG_MIN) {
+  if ((v = readLongAfterMulti(in, {"system Recommend dsg voltage"})) != LONG_MIN) {
   out->sys_rec_dsg_voltage = v;
   matched++;
-}
+  }
 
-if ((v = readLongAfterMulti(in, {"system Recommend chg current"})) != LONG_MIN) {
+  if ((v = readLongAfterMulti(in, {"system Recommend chg current"})) != LONG_MIN) {
   out->sys_rec_chg_current = v;
   matched++;
-}
+  }
 
-if ((v = readLongAfterMulti(in, {"system Recommend dsg current"})) != LONG_MIN) {
+  if ((v = readLongAfterMulti(in, {"system Recommend dsg current"})) != LONG_MIN) {
   out->sys_rec_dsg_current = v;
   matched++;
-}
+  }
 
-if ((v = readLongAfterMulti(in, {"Recommend chg voltage"})) != LONG_MIN) {
+  if ((v = readLongAfterMulti(in, {"Recommend chg voltage"})) != LONG_MIN) {
   out->rec_chg_voltage = v;
   matched++;
-}
+  }
 
-if ((v = readLongAfterMulti(in, {"Recommend dsg voltage"})) != LONG_MIN) {
+  if ((v = readLongAfterMulti(in, {"Recommend dsg voltage"})) != LONG_MIN) {
   out->rec_dsg_voltage = v;
   matched++;
-}
+  }
 
-if ((v = readLongAfterMulti(in, {"Recommend chg current"})) != LONG_MIN) {
+  if ((v = readLongAfterMulti(in, {"Recommend chg current"})) != LONG_MIN) {
   out->rec_chg_current = v;
   matched++;
-}
+  }
 
-if ((v = readLongAfterMulti(in, {"Recommend dsg current"})) != LONG_MIN) {
+  if ((v = readLongAfterMulti(in, {"Recommend dsg current"})) != LONG_MIN) {
   out->rec_dsg_current = v;
   matched++;
-}
+  }
 
-  if (strstr(in, "Alarm")) {
+  char stateBuf[16] = {0};
+  char alarmBuf[16] = {0};
+
+  if (readWordAfterLabel(in, "Alarm status", alarmBuf, sizeof(alarmBuf)) ||
+      readWordAfterLabel(in, "Alarm Status", alarmBuf, sizeof(alarmBuf))) {
+    if (strcmp(alarmBuf, "Normal") == 0 || strcmp(alarmBuf, "normal") == 0) {
+      strncpy(out->alarmState, "Normal", sizeof(out->alarmState) - 1);
+    } else {
+      strncpy(out->alarmState, "Alarm", sizeof(out->alarmState) - 1);
+    }
+  } else if (containsIgnoreCase(in, "protect")) {
     strncpy(out->alarmState, "Alarm", sizeof(out->alarmState) - 1);
   } else {
     strncpy(out->alarmState, "Normal", sizeof(out->alarmState) - 1);
   }
 
-  if (strstr(in, "Protect") || strstr(in, "protect")) {
-  strncpy(out->state, "Protect", sizeof(out->state) - 1);
-} else if (strstr(in, "discharging") || strstr(in, "Discharging") || strstr(in, "Dischg")) {
-  strncpy(out->state, "Dischg", sizeof(out->state) - 1);
-} else if (strstr(in, "charging") || strstr(in, "Charging") || strstr(in, "Charge")) {
-  strncpy(out->state, "Charge", sizeof(out->state) - 1);
-} else if (strstr(in, "idle") || strstr(in, "Idle")) {
-  strncpy(out->state, "Idle", sizeof(out->state) - 1);
-} else {
-  strncpy(out->state, "Unknown", sizeof(out->state) - 1);
-}
+  if (readWordAfterLabel(in, "System state", stateBuf, sizeof(stateBuf)) ||
+      readWordAfterLabel(in, "System State", stateBuf, sizeof(stateBuf)) ||
+      readWordAfterLabel(in, "State", stateBuf, sizeof(stateBuf))) {
+    if (strcmp(stateBuf, "Protect") == 0) {
+      strncpy(out->state, "Protect", sizeof(out->state) - 1);
+    } else if (strcmp(stateBuf, "Balance") == 0) {
+      strncpy(out->state, "Balance", sizeof(out->state) - 1);
+    } else if (strcmp(stateBuf, "Dischg") == 0 || strcmp(stateBuf, "Discharging") == 0) {
+      strncpy(out->state, "Dischg", sizeof(out->state) - 1);
+    } else if (strcmp(stateBuf, "Charge") == 0 || strcmp(stateBuf, "Charging") == 0) {
+      strncpy(out->state, "Charge", sizeof(out->state) - 1);
+    } else if (strcmp(stateBuf, "Idle") == 0) {
+      strncpy(out->state, "Idle", sizeof(out->state) - 1);
+    } else {
+      strncpy(out->state, stateBuf, sizeof(out->state) - 1);
+    }
+  } else if (containsIgnoreCase(in, "System is discharging")) {
+    strncpy(out->state, "Dischg", sizeof(out->state) - 1);
+  } else if (containsIgnoreCase(in, "System is charging")) {
+    strncpy(out->state, "Charge", sizeof(out->state) - 1);
+  } else if (containsIgnoreCase(in, "System is idle")) {
+    strncpy(out->state, "Idle", sizeof(out->state) - 1);
+  } else if (containsIgnoreCase(in, "System is balancing")) {
+    strncpy(out->state, "Balance", sizeof(out->state) - 1);
+  } else if (containsIgnoreCase(in, "System is protect")) {
+    strncpy(out->state, "Protect", sizeof(out->state) - 1);
+  } else {
+    strncpy(out->state, "Unknown", sizeof(out->state) - 1);
+  }
 
   out->valid = (matched >= 4);
   if (out->valid) out->lastUpdateMs = millis();

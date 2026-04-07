@@ -15,6 +15,7 @@
 #include "WebUI.h"
 batteryStack g_stack{};
 systemData   g_systemStack{};
+dailyEnergyData g_dailyEnergy{};
 statDebugData g_statDebug{};
 
 #include "PylonLink.h"
@@ -89,6 +90,50 @@ BatteryLink batt(Serial2, PIN_RX2, PIN_TX2);
 // Mesh-AP-Auswahl + Roaming
 
 static uint8_t g_targetBSSID[6] = {0};
+
+namespace EnergyTracker {
+  static void update(dailyEnergyData& energy, const batteryStack& stack, NTPClient& clock) {
+    static unsigned long lastIntegrateMs = 0;
+    const unsigned long nowMs = millis();
+
+    if (lastIntegrateMs == 0) {
+      lastIntegrateMs = nowMs;
+    }
+
+    unsigned long dtMs = nowMs - lastIntegrateMs;
+    lastIntegrateMs = nowMs;
+
+    energy.valid = true;
+    energy.lastUpdateMs = nowMs;
+
+    const unsigned long epoch = clock.getEpochTime();
+    const bool timeSynced = epoch > 1577836800UL;
+    energy.timeSynced = timeSynced;
+    energy.currentEpoch = epoch;
+
+    if (timeSynced) {
+      const unsigned long dayNumber = epoch / 86400UL;
+      if (energy.localDayNumber == 0) {
+        energy.localDayNumber = dayNumber;
+      } else if (dayNumber != energy.localDayNumber) {
+        energy.localDayNumber = dayNumber;
+        energy.chargeKWhToday = 0.0f;
+        energy.dischargeKWhToday = 0.0f;
+      }
+    }
+
+    if (!stack.valid || dtMs == 0 || dtMs > 15000UL) return;
+
+    const float powerW = (float)stack.getPowerDC();
+    const float deltaHours = (float)dtMs / 3600000.0f;
+
+    if (powerW > 0.0f) {
+      energy.chargeKWhToday += (powerW * deltaHours) / 1000.0f;
+    } else if (powerW < 0.0f) {
+      energy.dischargeKWhToday += ((-powerW) * deltaHours) / 1000.0f;
+    }
+  }
+}
 
 bool connectToBestAP(const char* ssid, const char* pass) {
   Serial.println(F("Scanning for best AP..."));
@@ -245,7 +290,6 @@ void setup() {
   }
 
   timeClient.begin();
-
   batt.begin(DEFAULT_BAUD);
   Parser::init(&g_log);
 
@@ -285,7 +329,7 @@ void setup() {
   });
 
   server.on("/diag", []() {
-    String s = "RSSI=" + String(WiFi.RSSI()) +
+    String s = "RSSI=" + String((WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0) +
                " dBm\nSleep=" + String(WiFi.getSleep() ? "on" : "off") +
                "\nHeap=" + String(ESP.getFreeHeap());
     server.send(200, "text/plain", s);
@@ -295,7 +339,7 @@ void setup() {
     server.send(200, "text/html", g_log.c_str());
   });
 
-  WebUI::init(&server, &batt, &g_stack, &g_systemStack,
+  WebUI::init(&server, &batt, &g_stack, &g_systemStack, &g_dailyEnergy,
               &g_statDebug,
               g_szRecvBuffCmd,
               sizeof(g_szRecvBuffCmd),
@@ -307,7 +351,7 @@ void setup() {
 #if ENABLE_MQTT
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
   mqttClient.setBufferSize(1024);
-  MQTTHandler::init(&mqttClient, &g_stack, &g_systemStack);
+  MQTTHandler::init(&mqttClient, &g_stack, &g_systemStack, &g_dailyEnergy);
 #endif
 }
 
@@ -318,6 +362,7 @@ void loop() {
   ArduinoOTA.handle();
   server.handleClient();
   timeClient.update();
+  EnergyTracker::update(g_dailyEnergy, g_stack, timeClient);
 
 #if ENABLE_MQTT
   MQTTHandler::loop();

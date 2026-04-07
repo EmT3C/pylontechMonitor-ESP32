@@ -47,6 +47,7 @@
 <header>
   <h1>Pylontech Monitor</h1>
   <small id="statusTxt" class="muted">Verbinde…</small>
+  <small id="clockTxt" class="muted">Zeit: –</small>
 </header>
 
 <div class="wrap">
@@ -81,6 +82,16 @@
       <h3>System-Temp Ø</h3>
       <div class="val" id="tsys">– °C</div>
       <small id="tsysHL" class="muted"></small>
+    </div>
+    <div class="card stat">
+      <h3>Laden heute</h3>
+      <div class="val" id="chargeToday">– kWh</div>
+      <small class="muted">seit Tagesbeginn</small>
+    </div>
+    <div class="card stat">
+      <h3>Entladen heute</h3>
+      <div class="val" id="dischargeToday">– kWh</div>
+      <small class="muted" id="energySync">seit Tagesbeginn</small>
     </div>
   </section>
 
@@ -120,6 +131,8 @@
       <div class="row"><span class="muted">System-Strom</span><span id="sysCurrent">– A</span></div>
       <div class="row"><span class="muted">RC</span><span id="rc">– mAh</span></div>
       <div class="row"><span class="muted">FCC</span><span id="fcc">– mAh</span></div>
+      <div class="row"><span class="muted">Laden heute</span><span id="chargeTodayDetail">– kWh</span></div>
+      <div class="row"><span class="muted">Entladen heute</span><span id="dischargeTodayDetail">– kWh</span></div>
       <div class="row"><span class="muted">Diag</span><span id="diag">–</span></div>
       <div class="row" style="margin-top:10px">
         <button id="restartBtn" class="btn" style="background:#ef4444" onclick="restartEsp()">ESP neu starten</button>
@@ -183,6 +196,18 @@
 const $ = s => document.querySelector(s);
 const fmt = (v, d=0) => (isFinite(v) ? Number(v).toFixed(d) : '–');
 
+function formatEpochLocal(epoch){
+  if (!isFinite(epoch) || Number(epoch) <= 1577836800) return 'Zeit: –';
+  const d = new Date(Number(epoch) * 1000);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mi = String(d.getUTCMinutes()).padStart(2, '0');
+  const ss = String(d.getUTCSeconds()).padStart(2, '0');
+  return `${dd}.${mm}.${yyyy} ${hh}:${mi}:${ss}`;
+}
+
 function setPill(el, txt){
   el.textContent = txt;
   el.className = 'pill';
@@ -219,6 +244,14 @@ function renderStack(s){
   const pdc = ((s.currentDC||0)/1000) * ((s.avgVoltage||0)/1000);
   $('#pdc').textContent = fmt(pdc,0) + ' W';
   $('#pac').textContent = fmt(estAC(pdc),0) + ' W';
+  $('#chargeToday').textContent = fmt(s.chargeKWhToday, 3) + ' kWh';
+  $('#dischargeToday').textContent = fmt(s.dischargeKWhToday, 3) + ' kWh';
+  $('#chargeTodayDetail').textContent = fmt(s.chargeKWhToday, 3) + ' kWh';
+  $('#dischargeTodayDetail').textContent = fmt(s.dischargeKWhToday, 3) + ' kWh';
+  $('#energySync').textContent = s.energyTimeSynced ? 'seit Mitternacht' : 'seit Start / Zeit unsicher';
+  $('#clockTxt').textContent = s.energyTimeSynced
+    ? formatEpochLocal(s.currentEpoch)
+    : 'Zeit: keine NTP-Synchronisation';
 
   setPill($('#statePill'), s.baseState || '–');
 

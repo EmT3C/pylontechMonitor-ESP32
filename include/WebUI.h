@@ -28,6 +28,7 @@ namespace WebUI {
             BatteryLink* link,
             batteryStack* stk,
             systemData* sys,
+            dailyEnergyData* energy,
             statDebugData* statDbg,
             char* rawBuf,
             size_t rawBufLen,
