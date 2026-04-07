@@ -233,28 +233,14 @@ void MQTTHandler::publishDiscovery() {
           nullptr,
           false);
 
-  {
-    StaticJsonDocument<384> doc;
-    doc["name"]                  = "Battery State";
-    doc["state_topic"]           = String(MQTT_TOPIC_ROOT) + "base_state";
-    doc["unique_id"]             = node + "_base_state";
-    doc["availability_topic"]    = String(MQTT_TOPIC_ROOT) + "availability";
-    doc["payload_available"]     = "online";
-    doc["payload_not_available"] = "offline";
-    doc["icon"]                  = "mdi:battery-heart-variant";
-
-    JsonObject dev = doc.createNestedObject("device");
-    JsonArray ids  = dev.createNestedArray("identifiers");
-    ids.add(node);
-    dev["manufacturer"] = "Pylontech";
-    dev["model"]        = "Battery Monitor";
-    dev["name"]         = node;
-
-    char payload[384];
-    size_t len = serializeJson(doc, payload, sizeof(payload));
-    String topic = String(HA_DISCOVERY_SENSOR_PREFIX) + node + "/base_state/config";
-    s_client->publish(topic.c_str(), (uint8_t*)payload, len, true);
-  }
+  pub_cfg("battery_state",
+          "Battery State",
+          String(MQTT_TOPIC_ROOT) + "base_state",
+          nullptr,
+          nullptr,
+          false,
+          nullptr,
+          "mdi:battery-heart-variant");
 
   pub_cfg("system_soc",       "System SOC",        String(MQTT_TOPIC_ROOT) + "system_soc",       "%",  "battery");
   pub_cfg("system_soh",       "System SOH",        String(MQTT_TOPIC_ROOT) + "system_soh",       "%",  nullptr);
@@ -324,28 +310,14 @@ void MQTTHandler::publishDiscovery() {
             false,
             nullptr,
             "mdi:alert-circle-outline");
-    {
-      StaticJsonDocument<384> doc;
-      doc["name"]                  = String("Battery ") + i + " State";
-      doc["state_topic"]           = String(MQTT_TOPIC_ROOT) + i + "/state";
-      doc["unique_id"]             = node + "_" + idp + "_state";
-      doc["availability_topic"]    = String(MQTT_TOPIC_ROOT) + "availability";
-      doc["payload_available"]     = "online";
-      doc["payload_not_available"] = "offline";
-      doc["icon"]                  = "mdi:battery";
-
-      JsonObject dev = doc.createNestedObject("device");
-      JsonArray ids  = dev.createNestedArray("identifiers");
-      ids.add(node);
-      dev["manufacturer"] = "Pylontech";
-      dev["model"]        = "Battery Monitor";
-      dev["name"]         = node;
-
-      char payload[384];
-      size_t len = serializeJson(doc, payload, sizeof(payload));
-      String topic = String(HA_DISCOVERY_SENSOR_PREFIX) + node + "/" + idp + "_state/config";
-      s_client->publish(topic.c_str(), (uint8_t*)payload, len, true);
-    }
+    pub_cfg(idp + "_state",
+            String("Battery ") + i + " State",
+            String(MQTT_TOPIC_ROOT) + i + "/state",
+            nullptr,
+            nullptr,
+            false,
+            nullptr,
+            "mdi:battery");
   }
 }
 
