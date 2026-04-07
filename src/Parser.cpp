@@ -15,6 +15,8 @@
 
 static circular_log<7000>* s_log = nullptr;
 
+static void setBatteryAlarmText(pylonBattery& b);
+
 void Parser::init(circular_log<7000>* log) {
   s_log = log;
 }
@@ -153,6 +155,7 @@ bool Parser::parsePwr(const char* in, batteryStack* out) {
     if (tokCount > 19) strncpy(b.b_t_st, tokens[19], sizeof(b.b_t_st) - 1);
 
     b.balancing = b.isBalancing();
+    setBatteryAlarmText(b);
 
     presentCnt++;
     out->currentDC  += b.current;
@@ -298,6 +301,38 @@ static bool containsIgnoreCase(const char* text, const char* needle) {
     if (i == needleLen) return true;
   }
   return false;
+}
+
+static void setBatteryAlarmText(pylonBattery& b) {
+  if (b.isProtect()) {
+    strncpy(b.alarmText, "Protect", sizeof(b.alarmText) - 1);
+    return;
+  }
+  if (b.isAlarm()) {
+    strncpy(b.alarmText, "Alarm", sizeof(b.alarmText) - 1);
+    return;
+  }
+  if (strcmp(b.voltageState, "Normal") != 0) {
+    snprintf(b.alarmText, sizeof(b.alarmText), "Voltage: %s", b.voltageState);
+    return;
+  }
+  if (strcmp(b.currentState, "Normal") != 0) {
+    snprintf(b.alarmText, sizeof(b.alarmText), "Current: %s", b.currentState);
+    return;
+  }
+  if (strcmp(b.tempState, "Normal") != 0) {
+    snprintf(b.alarmText, sizeof(b.alarmText), "Temp: %s", b.tempState);
+    return;
+  }
+  if (strcmp(b.b_v_st, "Normal") != 0) {
+    snprintf(b.alarmText, sizeof(b.alarmText), "Cell Volt: %s", b.b_v_st);
+    return;
+  }
+  if (strcmp(b.b_t_st, "Normal") != 0) {
+    snprintf(b.alarmText, sizeof(b.alarmText), "Cell Temp: %s", b.b_t_st);
+    return;
+  }
+  strncpy(b.alarmText, "Normal", sizeof(b.alarmText) - 1);
 }
 
 bool Parser::parsePwrsys(const char* in, systemData* out) {
@@ -478,7 +513,41 @@ bool Parser::parsePwrsys(const char* in, systemData* out) {
 bool Parser::parseStat(const char* in, pylonBattery* batt) {
   if (!in || !batt) return false;
 
-  long v = readLongAfterMulti(in, {"CYCLE Times", "Cycle Times"});
+  long v = readLongAfterMulti(in, {
+    "CYCLE Times",
+    "Cycle Times",
+    "Cycle times",
+    "cycle times",
+    "Cycles",
+    "Cycle"
+  });
+
+  if (v == LONG_MIN) {
+    const char* p = in;
+    while (*p) {
+      while (*p == '\r' || *p == '\n') ++p;
+      if (!*p) break;
+
+      const char* lineStart = p;
+      while (*p && *p != '\r' && *p != '\n') ++p;
+
+      char line[128];
+      size_t n = (size_t)(p - lineStart);
+      if (n >= sizeof(line)) n = sizeof(line) - 1;
+      memcpy(line, lineStart, n);
+      line[n] = 0;
+
+      if (!containsIgnoreCase(line, "cycle")) continue;
+
+      const char* q = line;
+      while (*q && !isdigit((unsigned char)*q) && *q != '-' && *q != '+') ++q;
+      if (!*q) continue;
+
+      v = atol(q);
+      break;
+    }
+  }
+
   if (v == LONG_MIN) return false;
 
   batt->cycleTimes = v;

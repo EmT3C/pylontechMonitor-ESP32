@@ -28,6 +28,7 @@ struct pylonBattery {
   char time[20]         = {0};
   char b_v_st[16]       = {0};
   char b_t_st[16]       = {0};
+  char alarmText[48]    = {0};
 
   bool balancing = false;
 
@@ -41,6 +42,7 @@ struct pylonBattery {
   bool isBalancing()   const { return balancing || stateEquals("Balance"); }
   bool isProtect()     const { return stateEquals("Protect"); }
   bool isAlarm()       const { return stateEquals("Alarm") || stateEquals("Alarm!"); }
+  bool hasAlarm()      const { return !isNormal() || isProtect() || isAlarm(); }
 
   bool isNormal() const {
     if (!isCharging() && !isDischarging() && !isIdle() && !isBalancing())

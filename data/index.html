@@ -113,6 +113,7 @@
             <th>Zell-T (min/max)</th>
             <th>Cycle Times</th>
             <th>State</th>
+            <th>Alarm</th>
           </tr>
         </thead>
         <tbody id="batBody"></tbody>
@@ -276,6 +277,7 @@ function renderStack(s){
       <td>${fmt((b.cellTempLow||0)/1000,1)} / ${fmt((b.cellTempHigh||0)/1000,1)} °C</td>
       <td>${fmt(b.cycleTimes,0)}</td>
       <td>${b.baseState || '-'}</td>
+      <td>${b.alarmText || 'Normal'}</td>
     `;
     tb.appendChild(tr);
   });

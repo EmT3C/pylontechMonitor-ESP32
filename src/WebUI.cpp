@@ -111,6 +111,7 @@ static void sendJsonStack() {
       nb["temp_c"]        = (float)b.tempr / 1000.0f;
       nb["isNormal"]      = b.isNormal();
       nb["cycleTimes"]    = b.cycleTimes;
+      nb["alarmText"]     = (b.alarmText[0] ? b.alarmText : "Normal");
     }
   }
 
@@ -213,6 +214,7 @@ static void sendJsonStatus() {
       nb["cellTempHigh"] = b.cellTempHigh;
       nb["baseState"]    = (b.baseState[0] ? b.baseState : "Unknown");
       nb["cycleTimes"]   = b.cycleTimes;
+      nb["alarmText"]    = (b.alarmText[0] ? b.alarmText : "Normal");
     }
   }
 

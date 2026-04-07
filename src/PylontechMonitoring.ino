@@ -7,6 +7,7 @@
 #include <ESPmDNS.h>
 #include <WebServer.h>
 #include <NTPClient.h>
+#include <Preferences.h>
 #include <circular_log.h>
 #include <esp_wifi.h>
 #include <LittleFS.h>
@@ -92,6 +93,33 @@ BatteryLink batt(Serial2, PIN_RX2, PIN_TX2);
 static uint8_t g_targetBSSID[6] = {0};
 
 namespace EnergyTracker {
+  static Preferences s_prefs;
+  static bool s_prefsOpen = false;
+  static bool s_dirty = false;
+  static unsigned long s_lastPersistMs = 0;
+
+  static void begin(dailyEnergyData& energy) {
+    s_prefsOpen = s_prefs.begin("daily-energy", false);
+    if (!s_prefsOpen) return;
+
+    energy.valid = true;
+    energy.localDayNumber = s_prefs.getULong("day", 0);
+    energy.chargeKWhToday = s_prefs.getFloat("chg", 0.0f);
+    energy.dischargeKWhToday = s_prefs.getFloat("dsg", 0.0f);
+  }
+
+  static void persist(const dailyEnergyData& energy, bool force = false) {
+    if (!s_prefsOpen) return;
+    const unsigned long nowMs = millis();
+    if (!force && (!s_dirty || (nowMs - s_lastPersistMs) < 300000UL)) return;
+
+    s_prefs.putULong("day", energy.localDayNumber);
+    s_prefs.putFloat("chg", energy.chargeKWhToday);
+    s_prefs.putFloat("dsg", energy.dischargeKWhToday);
+    s_lastPersistMs = nowMs;
+    s_dirty = false;
+  }
+
   static void update(dailyEnergyData& energy, const batteryStack& stack, NTPClient& clock) {
     static unsigned long lastIntegrateMs = 0;
     const unsigned long nowMs = millis();
@@ -115,23 +143,124 @@ namespace EnergyTracker {
       const unsigned long dayNumber = epoch / 86400UL;
       if (energy.localDayNumber == 0) {
         energy.localDayNumber = dayNumber;
+        s_dirty = true;
       } else if (dayNumber != energy.localDayNumber) {
         energy.localDayNumber = dayNumber;
         energy.chargeKWhToday = 0.0f;
         energy.dischargeKWhToday = 0.0f;
+        s_dirty = true;
       }
     }
 
-    if (!stack.valid || dtMs == 0 || dtMs > 15000UL) return;
+    if (!stack.valid || dtMs == 0 || dtMs > 15000UL) {
+      persist(energy);
+      return;
+    }
 
     const float powerW = (float)stack.getPowerDC();
     const float deltaHours = (float)dtMs / 3600000.0f;
 
     if (powerW > 0.0f) {
       energy.chargeKWhToday += (powerW * deltaHours) / 1000.0f;
+      s_dirty = true;
     } else if (powerW < 0.0f) {
       energy.dischargeKWhToday += ((-powerW) * deltaHours) / 1000.0f;
+      s_dirty = true;
     }
+
+    persist(energy);
+  }
+}
+
+namespace StatRetry {
+  static bool run(BatteryLink& link,
+                  circular_log<7000>& log,
+                  char* recvBuf,
+                  size_t recvBufLen,
+                  uint8_t statIdx,
+                  batteryStack& stack,
+                  statDebugData& dbg)
+  {
+    if (statIdx < 1 || statIdx > MAX_PYLON_BATTERIES) return false;
+
+    char statCmd[16];
+    snprintf(statCmd, sizeof(statCmd), "stat %u", statIdx);
+    strncpy(dbg.lastCommand, statCmd, sizeof(dbg.lastCommand) - 1);
+    dbg.lastCommand[sizeof(dbg.lastCommand) - 1] = 0;
+
+    const int maxAttempts = 2;
+    for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+      memset(recvBuf, 0, recvBufLen);
+
+      if (!link.sendAndReceivePrompt(statCmd, recvBuf, recvBufLen, 10000)) {
+        dbg.lastTimedOut = true;
+        strncpy(dbg.lastMessage,
+                attempt < maxAttempts ? "timeout, retry" : "timeout",
+                sizeof(dbg.lastMessage) - 1);
+        dbg.lastMessage[sizeof(dbg.lastMessage) - 1] = 0;
+
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 attempt < maxAttempts
+                   ? "STAT timeout idx=%u attempt=%d retrying"
+                   : "STAT timeout idx=%u attempt=%d",
+                 statIdx, attempt);
+        log.Log(msg);
+
+        if (attempt < maxAttempts) {
+          delay(2000);
+          continue;
+        }
+        return false;
+      }
+
+      char gotMsg[64];
+      snprintf(gotMsg, sizeof(gotMsg),
+               attempt < maxAttempts ? "got %s try %d" : "got %s",
+               statCmd, attempt);
+      log.Log(gotMsg);
+
+      pylonBattery newBatt = stack.batts[statIdx - 1];
+      if (Parser::parseStat(recvBuf, &newBatt)) {
+        stack.batts[statIdx - 1].cycleTimes = newBatt.cycleTimes;
+        dbg.lastSuccess = true;
+        dbg.lastTimedOut = false;
+        dbg.lastParseFailed = false;
+        dbg.lastCycleTimes = newBatt.cycleTimes;
+        dbg.lastSuccessMs = millis();
+        strncpy(dbg.lastMessage, attempt > 1 ? "ok after retry" : "ok", sizeof(dbg.lastMessage) - 1);
+        dbg.lastMessage[sizeof(dbg.lastMessage) - 1] = 0;
+
+        char okMsg[96];
+        snprintf(okMsg, sizeof(okMsg),
+                 attempt > 1
+                   ? "STAT ok idx=%u cycleTimes=%ld after retry"
+                   : "STAT ok idx=%u cycleTimes=%ld",
+                 statIdx, newBatt.cycleTimes);
+        log.Log(okMsg);
+        return true;
+      }
+
+      dbg.lastParseFailed = true;
+      strncpy(dbg.lastMessage,
+              attempt < maxAttempts ? "parse failed, retry" : "parse failed",
+              sizeof(dbg.lastMessage) - 1);
+      dbg.lastMessage[sizeof(dbg.lastMessage) - 1] = 0;
+
+      char failMsg[112];
+      snprintf(failMsg, sizeof(failMsg),
+               attempt < maxAttempts
+                 ? "STAT parse failed idx=%u attempt=%d retrying"
+                 : "STAT parse failed idx=%u attempt=%d - keeping previous cycleTimes",
+               statIdx, attempt);
+      log.Log(failMsg);
+
+      if (attempt < maxAttempts) {
+        delay(2000);
+      }
+    }
+
+    return false;
   }
 }
 
@@ -290,6 +419,7 @@ void setup() {
   }
 
   timeClient.begin();
+  EnergyTracker::begin(g_dailyEnergy);
   batt.begin(DEFAULT_BAUD);
   Parser::init(&g_log);
 
@@ -476,54 +606,13 @@ if (millis() - statBootDelayStart >= statBootDelayMs) {
       g_log.Log(dbg);
     }
 
-    char statCmd[16];
-    snprintf(statCmd, sizeof(statCmd), "stat %u", statIdx);
-    strncpy(g_statDebug.lastCommand, statCmd, sizeof(g_statDebug.lastCommand) - 1);
-    g_statDebug.lastCommand[sizeof(g_statDebug.lastCommand) - 1] = 0;
-
-    memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
-
-    // WICHTIG: stat über Prompt-Pfad lesen
-    if (batt.sendAndReceivePrompt(statCmd, g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), 10000)) {
-      char dbg[64];
-      snprintf(dbg, sizeof(dbg), "got %s", statCmd);
-      g_log.Log(dbg);
-
-      if (statIdx >= 1 && statIdx <= MAX_PYLON_BATTERIES) {
-        pylonBattery newBatt = g_stack.batts[statIdx - 1];
-        if (Parser::parseStat(g_szRecvBuffPoll, &newBatt)) {
-          g_stack.batts[statIdx - 1].cycleTimes = newBatt.cycleTimes;
-          g_statDebug.lastSuccess = true;
-          g_statDebug.lastCycleTimes = newBatt.cycleTimes;
-          g_statDebug.lastSuccessMs = millis();
-          strncpy(g_statDebug.lastMessage, "ok", sizeof(g_statDebug.lastMessage) - 1);
-          g_statDebug.lastMessage[sizeof(g_statDebug.lastMessage) - 1] = 0;
-          char dbgOk[96];
-          snprintf(dbgOk, sizeof(dbgOk),
-                   "STAT ok idx=%u cycleTimes=%ld",
-                   statIdx, newBatt.cycleTimes);
-          g_log.Log(dbgOk);
-        } else {
-          g_statDebug.lastParseFailed = true;
-          strncpy(g_statDebug.lastMessage, "parse failed", sizeof(g_statDebug.lastMessage) - 1);
-          g_statDebug.lastMessage[sizeof(g_statDebug.lastMessage) - 1] = 0;
-          char dbgFail[96];
-          snprintf(dbgFail, sizeof(dbgFail),
-                   "STAT parse failed idx=%u - keeping previous cycleTimes",
-                   statIdx);
-          g_log.Log(dbgFail);
-        }
-      }
-    } else {
-      g_statDebug.lastTimedOut = true;
-      strncpy(g_statDebug.lastMessage, "timeout", sizeof(g_statDebug.lastMessage) - 1);
-      g_statDebug.lastMessage[sizeof(g_statDebug.lastMessage) - 1] = 0;
-      char dbgTimeout[96];
-      snprintf(dbgTimeout, sizeof(dbgTimeout),
-               "STAT timeout idx=%u - keeping previous cycleTimes",
-               statIdx);
-      g_log.Log(dbgTimeout);
-    }
+    StatRetry::run(batt,
+                   g_log,
+                   g_szRecvBuffPoll,
+                   sizeof(g_szRecvBuffPoll),
+                   statIdx,
+                   g_stack,
+                   g_statDebug);
 
     statIdx++;
 

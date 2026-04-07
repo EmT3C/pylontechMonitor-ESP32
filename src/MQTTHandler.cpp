@@ -136,6 +136,9 @@ void MQTTHandler::publishIfConnected() {
 
     snprintf(topic, sizeof(topic), MQTT_TOPIC_ROOT "%d/state", i + 1);
     s_client->publish(topic, st, true);
+
+    snprintf(topic, sizeof(topic), MQTT_TOPIC_ROOT "%d/alarm_text", i + 1);
+    s_client->publish(topic, b.alarmText[0] ? b.alarmText : "Normal", true);
   }
 
   char maxBuf[32];
@@ -313,6 +316,14 @@ void MQTTHandler::publishDiscovery() {
             "mdi:gauge");
     pub_cfg(idp + "_cell_delta", String("Battery ") + i + " Cell Delta", String(MQTT_TOPIC_ROOT) + i + "/cell_delta", "mV", nullptr, false);
     pub_cfg(idp + "_cycle_times", String("Battery ") + i + " Cycle Times", String(MQTT_TOPIC_ROOT) + i + "/cycle_times", nullptr, nullptr, false);
+    pub_cfg(idp + "_alarm_text",
+            String("Battery ") + i + " Alarm",
+            String(MQTT_TOPIC_ROOT) + i + "/alarm_text",
+            nullptr,
+            nullptr,
+            false,
+            nullptr,
+            "mdi:alert-circle-outline");
     {
       StaticJsonDocument<384> doc;
       doc["name"]                  = String("Battery ") + i + " State";
