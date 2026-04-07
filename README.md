@@ -6,6 +6,8 @@ Deutschsprachiger ESP32-Monitor fuer Pylontech-Batterien mit:
 - MQTT-Anbindung
 - Home-Assistant-MQTT-Discovery
 - Tageswerte fuer Laden und Entladen in kWh
+- persistente Tageszaehler per Preferences
+- Alarmdetails je Batterie in Web-UI und MQTT
 - Frontend aus LittleFS
 
 Kurzbeschreibung fuer GitHub:
@@ -31,7 +33,7 @@ Dieses Repository enthaelt keine echten Zugangsdaten.
 ## Build
 
 ```bash
-PLATFORMIO_CORE_DIR=.platformio-core ~/.local/bin/platformio run
+~/.platformio/penv/bin/platformio run
 ```
 
 ## LittleFS hochladen
@@ -39,7 +41,7 @@ PLATFORMIO_CORE_DIR=.platformio-core ~/.local/bin/platformio run
 Wenn Dateien in `data/` geaendert wurden, sollte anschliessend auch das LittleFS-Dateisystem hochgeladen werden:
 
 ```bash
-PLATFORMIO_CORE_DIR=.platformio-core ~/.local/bin/platformio run -t uploadfs
+~/.platformio/penv/bin/platformio run -t uploadfs
 ```
 
 ## MQTT und Home Assistant
@@ -52,14 +54,25 @@ Wichtige zusaetzliche Sensoren:
 - `discharge_kwh_today` -> Anzeigename `Entladen heute`, Einheit `kWh`
 - `dc_power` -> Anzeigename `Battery DC Power`, Einheit `W`
 - `soc` -> Anzeigename `Battery SoC`, Einheit `%`
+- `1/alarm_text` bis `6/alarm_text` -> Textsensor je Batterie mit Alarmursache wie `Normal`, `Protect`, `Voltage: ...` oder `Temp: ...`
 
 Die Discovery enthaelt passende Icons fuer:
 - Tageswerte Laden/Entladen
 - Gesamtzustand und Batterie-Zustaende
 - Leistung je Batterie
+- Alarmtext je Batterie
 
 ## Zeitbasis
 
 Datum und Uhrzeit werden per NTP aktualisiert.
 Die Tages-kWh werden bei gueltiger NTP-Zeit an Mitternacht zurueckgesetzt.
+Die Werte werden zusaetzlich per Preferences gespeichert und nach einem Reboot am selben Tag weitergefuehrt.
 Wenn noch keine gueltige Zeit vorliegt, laufen die Werte zunaechst seit Start weiter und die Web-UI weist darauf hin.
+
+## Web-UI
+
+Die Weboberflaeche zeigt:
+- Gesamtwerte fuer SoC, Spannung, Strom und Leistung
+- Tageswerte fuer Laden und Entladen
+- aktuelle NTP-Zeit
+- je Batterie SoC, Spannungs- und Temperaturwerte, Cycle Times, Zustand und Alarmtext
