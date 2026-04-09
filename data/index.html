@@ -327,6 +327,8 @@ function renderStatDebug(d){
 let statusFailures = 0;
 let stackInFlight = false;
 let systemInFlight = false;
+let lastDiagText = '–';
+let diagFailures = 0;
 
 function markOnline(){
   statusFailures = 0;
@@ -381,9 +383,15 @@ async function refreshStatDebug(){
 async function refreshDiag(){
   try{
     const r = await fetch('/diag', { cache: 'no-store' });
-    $('#diag').textContent = r.ok ? (await r.text()).replace(/\n/g, ' | ') : '–';
+    if (!r.ok) throw new Error('/diag: ' + r.status);
+    lastDiagText = (await r.text()).replace(/\n/g, ' | ');
+    diagFailures = 0;
+    $('#diag').textContent = lastDiagText;
   }catch(e){
-    $('#diag').textContent = '–';
+    diagFailures++;
+    $('#diag').textContent = diagFailures >= 2
+      ? lastDiagText + ' | Diag veraltet'
+      : lastDiagText;
   }
 }
 

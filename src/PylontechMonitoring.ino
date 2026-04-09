@@ -574,7 +574,12 @@ void loop() {
 
     memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
     if (batt.sendAndReceive("pwr", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), 4000)) {
-      Parser::parsePwr(g_szRecvBuffPoll, &g_stack);
+      batteryStack parsedStack = g_stack;
+      if (Parser::parsePwr(g_szRecvBuffPoll, &parsedStack)) {
+        g_stack = parsedStack;
+      } else {
+        g_log.Log("PWR parse failed - keeping previous values");
+      }
     }
   }
 
@@ -587,7 +592,12 @@ void loop() {
 
     memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
     if (batt.sendAndReceive("pwrsys", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), 6000)) {
-      Parser::parsePwrsys(g_szRecvBuffPoll, &g_systemStack);
+      systemData parsedSystem = g_systemStack;
+      if (Parser::parsePwrsys(g_szRecvBuffPoll, &parsedSystem)) {
+        g_systemStack = parsedSystem;
+      } else {
+        g_log.Log("PWRSYS parse failed - keeping previous values");
+      }
     }
   }
 
