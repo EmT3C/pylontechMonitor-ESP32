@@ -40,7 +40,7 @@ namespace Led {
 
   void setOTA(bool on) { s_ota = on; }
 
-  void tick(bool wifiOK, bool mqttOK, bool alarm) {
+  void tick(bool wifiOK, bool mqttOK, bool alarm, bool charging, bool discharging, bool bootFault) {
     const unsigned long now = millis();
 
     if (s_ota) {
@@ -55,9 +55,30 @@ namespace Led {
       writeRaw(((now / 500) % 2) != 0);
       return;
     }
+    if (bootFault) {
+      unsigned long ph = now % 2200;
+      bool on = (ph < 120) ||
+                (ph >= 240 && ph < 360) ||
+                (ph >= 480 && ph < 600) ||
+                (ph >= 720 && ph < 840);
+      writeRaw(on);
+      return;
+    }
     if (alarm) {
       unsigned long ph = now % 1600;
       bool on = (ph < 100) || (ph >= 200 && ph < 300) || (ph >= 400 && ph < 500);
+      writeRaw(on);
+      return;
+    }
+    if (charging) {
+      unsigned long ph = now % 1400;
+      bool on = (ph < 180) || (ph >= 260 && ph < 440);
+      writeRaw(on);
+      return;
+    }
+    if (discharging) {
+      unsigned long ph = now % 2200;
+      bool on = (ph < 500);
       writeRaw(on);
       return;
     }
@@ -594,8 +615,11 @@ void loop() {
 
   bool alarm = (strcmp(g_stack.baseState, "Alarm!") == 0) ||
                (strcmp(g_systemStack.alarmState, "Alarm") == 0);
+  bool charging = strcmp(g_stack.baseState, "Charge") == 0;
+  bool discharging = strcmp(g_stack.baseState, "Dischg") == 0;
+  bool bootFault = isAbnormalReset(g_resetReason) && millis() < 30000UL;
 
-  Led::tick(wifiOK, mqttOK, alarm);
+  Led::tick(wifiOK, mqttOK, alarm, charging, discharging, bootFault);
 
   // ---------------------------
   // Hauptpolling
