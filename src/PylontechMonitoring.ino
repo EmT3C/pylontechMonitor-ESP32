@@ -10,6 +10,7 @@
 #include <Preferences.h>
 #include <circular_log.h>
 #include <esp_wifi.h>
+#include <esp_system.h>
 #include <LittleFS.h>
 
 #include "batteryStack.h"
@@ -86,6 +87,41 @@ BatteryLink batt(Serial2, PIN_RX2, PIN_TX2);
   WiFiClient   espClient;
   PubSubClient mqttClient(espClient);
 #endif
+
+RTC_DATA_ATTR uint32_t g_bootCount = 0;
+RTC_DATA_ATTR uint32_t g_abnormalResetCount = 0;
+
+static esp_reset_reason_t g_resetReason = ESP_RST_UNKNOWN;
+
+static const char* resetReasonToString(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_UNKNOWN:   return "Unknown";
+    case ESP_RST_POWERON:   return "PowerOn";
+    case ESP_RST_EXT:       return "External";
+    case ESP_RST_SW:        return "Software";
+    case ESP_RST_PANIC:     return "Panic";
+    case ESP_RST_INT_WDT:   return "InterruptWDT";
+    case ESP_RST_TASK_WDT:  return "TaskWDT";
+    case ESP_RST_WDT:       return "OtherWDT";
+    case ESP_RST_DEEPSLEEP: return "DeepSleep";
+    case ESP_RST_BROWNOUT:  return "Brownout";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "Invalid";
+  }
+}
+
+static bool isAbnormalReset(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_PANIC:
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:
+    case ESP_RST_BROWNOUT:
+      return true;
+    default:
+      return false;
+  }
+}
 
 // -----------------------------------------------------------------------------
 // Mesh-AP-Auswahl + Roaming
@@ -208,7 +244,7 @@ namespace StatRetry {
         log.Log(msg);
 
         if (attempt < maxAttempts) {
-          delay(2000);
+          delay(50);
           continue;
         }
         return false;
@@ -256,7 +292,7 @@ namespace StatRetry {
       log.Log(failMsg);
 
       if (attempt < maxAttempts) {
-        delay(2000);
+        delay(50);
       }
     }
 
@@ -368,6 +404,23 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
+  g_resetReason = esp_reset_reason();
+  g_bootCount++;
+  if (isAbnormalReset(g_resetReason)) {
+    g_abnormalResetCount++;
+  }
+
+  {
+    char bootMsg[160];
+    snprintf(bootMsg, sizeof(bootMsg),
+             "BOOT reset=%s bootCount=%lu abnormalResets=%lu",
+             resetReasonToString(g_resetReason),
+             (unsigned long)g_bootCount,
+             (unsigned long)g_abnormalResetCount);
+    Serial.println(bootMsg);
+    g_log.Log(bootMsg);
+  }
+
   if (!LittleFS.begin(true)) {
     Serial.println("LittleFS mount failed");
   }
@@ -461,7 +514,10 @@ void setup() {
   server.on("/diag", []() {
     String s = "RSSI=" + String((WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0) +
                " dBm\nSleep=" + String(WiFi.getSleep() ? "on" : "off") +
-               "\nHeap=" + String(ESP.getFreeHeap());
+               "\nHeap=" + String(ESP.getFreeHeap()) +
+               "\nReset=" + String(resetReasonToString(g_resetReason)) +
+               "\nBootCount=" + String(g_bootCount) +
+               "\nAbnormalResets=" + String(g_abnormalResetCount);
     server.send(200, "text/plain", s);
   });
 
@@ -518,19 +574,7 @@ void loop() {
 
     memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
     if (batt.sendAndReceive("pwr", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), 4000)) {
-      g_log.Log("got PWR");
       Parser::parsePwr(g_szRecvBuffPoll, &g_stack);
-
-      const char* p1 = strstr(g_szRecvBuffPoll, "\r\r\n1     ");
-      if (p1) {
-        char lbuf[160];
-        strncpy(lbuf, p1 + 3, sizeof(lbuf) - 1);
-        lbuf[sizeof(lbuf) - 1] = 0;
-        char* e = strchr(lbuf, '\n');
-        if (e) *e = 0;
-        g_log.Log("PWR L1:");
-        g_log.Log(lbuf);
-      }
     }
   }
 
@@ -543,7 +587,6 @@ void loop() {
 
     memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
     if (batt.sendAndReceive("pwrsys", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), 6000)) {
-      g_log.Log("got PWRSYS");
       Parser::parsePwrsys(g_szRecvBuffPoll, &g_systemStack);
     }
   }

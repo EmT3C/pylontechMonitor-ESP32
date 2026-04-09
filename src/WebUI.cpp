@@ -15,6 +15,8 @@ static statDebugData*      s_statDbg = nullptr;
 static char*               s_rawBuf = nullptr;
 static size_t              s_rawLen = 0;
 static circular_log<7000>* s_log    = nullptr;
+static bool                s_cmdBusy = false;
+static unsigned long       s_lastCmdMs = 0;
 
 static bool startsWithIgnoreCase(const char* text, const char* prefix) {
   if (!text || !prefix) return false;
@@ -50,12 +52,12 @@ static bool commandNeedsPrompt(const char* cmd) {
 
 static void sendJsonDocument(JsonDocument& doc) {
   if (!s_server) return;
-
-  String out;
-  out.reserve(measureJson(doc) + 1);
-  serializeJson(doc, out);
   s_server->sendHeader("Cache-Control", "no-store");
-  s_server->send(200, "application/json", out);
+  s_server->setContentLength(measureJson(doc));
+  s_server->send(200, "application/json", "");
+  WiFiClient client = s_server->client();
+  serializeJson(doc, client);
+  client.flush();
 }
 
 static void sendJsonStack() {
@@ -177,7 +179,7 @@ static void sendJsonSystem() {
 static void sendJsonStatus() {
   if (!s_server) return;
 
-  StaticJsonDocument<6144> doc;
+  StaticJsonDocument<2048> doc;
 
   JsonObject meta = doc.createNestedObject("meta");
   meta["uptimeMs"] = millis();
@@ -197,25 +199,6 @@ static void sendJsonStatus() {
     stack["temp_c"]        = (float)s_stack->temp / 1000.0f;
     stack["isNormal"]      = s_stack->isNormal();
 
-    JsonArray batts = stack.createNestedArray("batts");
-    for (int i = 0; i < MAX_PYLON_BATTERIES; ++i) {
-      const pylonBattery& b = s_stack->batts[i];
-      if (!b.isPresent) continue;
-
-      JsonObject nb = batts.createNestedObject();
-      nb["idx"]          = i + 1;
-      nb["soc"]          = b.soc;
-      nb["voltage"]      = b.voltage;
-      nb["current"]      = b.current;
-      nb["tempr"]        = b.tempr;
-      nb["cellVoltLow"]  = b.cellVoltLow;
-      nb["cellVoltHigh"] = b.cellVoltHigh;
-      nb["cellTempLow"]  = b.cellTempLow;
-      nb["cellTempHigh"] = b.cellTempHigh;
-      nb["baseState"]    = (b.baseState[0] ? b.baseState : "Unknown");
-      nb["cycleTimes"]   = b.cycleTimes;
-      nb["alarmText"]    = (b.alarmText[0] ? b.alarmText : "Normal");
-    }
   }
 
   JsonObject system = doc.createNestedObject("system");
@@ -278,6 +261,19 @@ static void sendJsonStatus() {
   }
 
   sendJsonDocument(doc);
+}
+
+static bool tryBeginCommand() {
+  const unsigned long now = millis();
+  if (s_cmdBusy) return false;
+  if ((now - s_lastCmdMs) < 1500UL) return false;
+  s_cmdBusy = true;
+  return true;
+}
+
+static void endCommand() {
+  s_cmdBusy = false;
+  s_lastCmdMs = millis();
 }
 
 static void sendJsonStatDebug() {
@@ -373,6 +369,14 @@ void WebUI::init(WebServer* server,
       s_server->send(400, "text/plain", "empty");
       return;
     }
+    if (code.length() > 64) {
+      s_server->send(413, "text/plain", "command too long");
+      return;
+    }
+    if (!tryBeginCommand()) {
+      s_server->send(429, "text/plain", "busy");
+      return;
+    }
 
     if (s_log) {
       String s = "CMD: " + code;
@@ -387,6 +391,7 @@ void WebUI::init(WebServer* server,
     } else {
       ok = s_link->sendAndReceive(code.c_str(), s_rawBuf, s_rawLen, 8000);
     }
+    endCommand();
 
     if (!ok) {
       s_server->send(504, "text/plain", "timeout");
@@ -412,6 +417,14 @@ void WebUI::init(WebServer* server,
       s_server->send(400, "text/plain", "missing code");
       return;
     }
+    if (code.length() > 64) {
+      s_server->send(413, "text/plain", "command too long");
+      return;
+    }
+    if (!tryBeginCommand()) {
+      s_server->send(429, "text/plain", "busy");
+      return;
+    }
 
     if (s_log) {
       String s = "CMD(GET): " + code;
@@ -421,6 +434,7 @@ void WebUI::init(WebServer* server,
     memset(s_rawBuf, 0, s_rawLen);
 
     bool ok = s_link->sendAndReceivePrompt(code.c_str(), s_rawBuf, s_rawLen, 15000);
+    endCommand();
     if (!ok) {
       s_server->send(504, "text/plain", "timeout");
       return;
