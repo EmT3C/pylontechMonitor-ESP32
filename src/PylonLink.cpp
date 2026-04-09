@@ -135,6 +135,7 @@ int BatteryLink::readUntil(char* buf, const char* term, size_t maxLen, unsigned 
   size_t last6Len = 0;
   size_t last12Len = 0;
   size_t last96Len = 0;
+  uint16_t bytesSinceYield = 0;
 
   while ((millis() - t0) < timeoutMs && len < maxLen - 1) {
     while (port.available() && len < maxLen - 1) {
@@ -145,6 +146,10 @@ int BatteryLink::readUntil(char* buf, const char* term, size_t maxLen, unsigned 
       // Puffer füllen
       buf[len++] = c;
       buf[len] = '\0';
+      if (++bytesSinceYield >= 128) {
+        bytesSinceYield = 0;
+        delay(0);
+      }
 
       // Sliding windows aktualisieren
       pushWindow(last6, sizeof(last6), last6Len, c);

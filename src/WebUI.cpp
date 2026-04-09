@@ -52,12 +52,11 @@ static bool commandNeedsPrompt(const char* cmd) {
 
 static void sendJsonDocument(JsonDocument& doc) {
   if (!s_server) return;
+  String out;
+  out.reserve(measureJson(doc) + 1);
+  serializeJson(doc, out);
   s_server->sendHeader("Cache-Control", "no-store");
-  s_server->setContentLength(measureJson(doc));
-  s_server->send(200, "application/json", "");
-  WiFiClient client = s_server->client();
-  serializeJson(doc, client);
-  client.flush();
+  s_server->send(200, "application/json", out);
 }
 
 static void sendJsonStack() {

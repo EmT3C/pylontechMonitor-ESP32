@@ -13,6 +13,7 @@ public:
 
   int  available() const;
   void logIncoming(circular_log<7000>* log);
+  bool isBusy() const { return m_busy; }
 
 private:
   HardwareSerial& port;
@@ -25,5 +26,4 @@ private:
   int  readUntil(char* buf, const char* term, size_t maxLen, unsigned long timeoutMs);
   void wakeUpConsole(); // <— WICHTIG: Deklaration
 };
-
 

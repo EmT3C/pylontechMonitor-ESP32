@@ -123,6 +123,38 @@ static bool isAbnormalReset(esp_reset_reason_t reason) {
   }
 }
 
+namespace StackGuard {
+  static uint8_t s_missingBatteryCycles = 0;
+
+  static bool shouldAcceptParsedStack(const batteryStack& current, const batteryStack& parsed) {
+    if (!parsed.valid || parsed.batteryCount <= 0) return false;
+    if (!current.valid || current.batteryCount <= 0) {
+      s_missingBatteryCycles = 0;
+      return true;
+    }
+
+    if (parsed.batteryCount >= current.batteryCount) {
+      s_missingBatteryCycles = 0;
+      return true;
+    }
+
+    if (s_missingBatteryCycles < 255) s_missingBatteryCycles++;
+    return s_missingBatteryCycles >= 3;
+  }
+
+  static void markAccepted(const batteryStack& current, const batteryStack& parsed) {
+    if (parsed.batteryCount >= current.batteryCount) {
+      s_missingBatteryCycles = 0;
+    } else if (s_missingBatteryCycles >= 3) {
+      s_missingBatteryCycles = 0;
+    }
+  }
+
+  static uint8_t missingCycles() {
+    return s_missingBatteryCycles;
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Mesh-AP-Auswahl + Roaming
 
@@ -569,17 +601,31 @@ void loop() {
   // Hauptpolling
   // ---------------------------
   static uint32_t lastPollPwr = 0;
-  if (millis() - lastPollPwr >= 2000) {
+  if (millis() - lastPollPwr >= 2000UL) {
     lastPollPwr = millis();
 
     memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
     if (batt.sendAndReceive("pwr", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), 4000)) {
       batteryStack parsedStack = g_stack;
       if (Parser::parsePwr(g_szRecvBuffPoll, &parsedStack)) {
-        g_stack = parsedStack;
+        if (StackGuard::shouldAcceptParsedStack(g_stack, parsedStack)) {
+          batteryStack previousStack = g_stack;
+          g_stack = parsedStack;
+          StackGuard::markAccepted(previousStack, parsedStack);
+        } else {
+          char msg[96];
+          snprintf(msg, sizeof(msg),
+                   "PWR transient drop %d->%d held (%u)",
+                   g_stack.batteryCount,
+                   parsedStack.batteryCount,
+                   StackGuard::missingCycles());
+          g_log.Log(msg);
+        }
       } else {
         g_log.Log("PWR parse failed - keeping previous values");
       }
+    } else {
+      g_log.Log("PWR timeout - keeping previous values");
     }
   }
 
@@ -587,7 +633,7 @@ void loop() {
   // pwrsys langsamer pollen
   // ---------------------------
   static uint32_t lastPollPwrsys = 0;
-  if (millis() - lastPollPwrsys >= 15000) {
+  if (millis() - lastPollPwrsys >= 15000UL) {
     lastPollPwrsys = millis();
 
     memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
@@ -598,6 +644,8 @@ void loop() {
       } else {
         g_log.Log("PWRSYS parse failed - keeping previous values");
       }
+    } else {
+      g_log.Log("PWRSYS timeout - keeping previous values");
     }
   }
 
