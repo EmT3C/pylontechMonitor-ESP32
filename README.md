@@ -8,6 +8,8 @@ Deutschsprachiger ESP32-Monitor fuer Pylontech-Batterien mit:
 - Tageswerte fuer Laden und Entladen in kWh
 - persistente Tageszaehler per Preferences
 - Alarmdetails je Batterie in Web-UI und MQTT
+- Reset- und Boot-Diagnose im Web-UI
+- LED-Statusanzeige fuer WLAN, MQTT, Laden, Entladen und Alarm
 - Frontend aus LittleFS
 
 Kurzbeschreibung fuer GitHub:
@@ -76,3 +78,20 @@ Die Weboberflaeche zeigt:
 - Tageswerte fuer Laden und Entladen
 - aktuelle NTP-Zeit
 - je Batterie SoC, Spannungs- und Temperaturwerte, Cycle Times, Zustand und Alarmtext
+- Diagnosewerte wie RSSI, Heap, Reset-Grund, Boot-Zaehler und auffaellige Resets
+
+Kurzzeitige Kommunikationsaussetzer werden in der Anzeige abgefedert:
+- letzte gueltige Batterie- und Systemwerte bleiben bei einzelnen Parse-Fehlern erhalten
+- `Diag` springt nicht sofort auf leer, sondern markiert Daten bei Bedarf als veraltet
+
+## LED-Status
+
+Die Onboard-LED dient als Statusanzeige:
+- sehr schnelles Blinken: OTA aktiv
+- schnelles Blinken: kein WLAN
+- langsameres Blinken: WLAN vorhanden, aber kein MQTT
+- vier kurze Blitze: abnormaler Reset nach dem Booten erkannt
+- Dreifachblitz: Alarm
+- Doppelimpuls: Laden
+- langer Einzelimpuls: Entladen
+- kurzer Heartbeat: Normalbetrieb / Idle
