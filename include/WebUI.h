@@ -32,5 +32,5 @@ namespace WebUI {
             statDebugData* statDbg,
             char* rawBuf,
             size_t rawBufLen,
-            circular_log<7000>* clog);
+            circular_log<16384>* clog);
 }

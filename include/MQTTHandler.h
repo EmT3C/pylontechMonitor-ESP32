@@ -11,6 +11,15 @@ public:
   static void publishIfConnected();
   static void publishDiscovery();
   static void publishData();
+  static void publishDiagnostic(const char* resetReason,
+                                const char* savedPhase,
+                                const char* rtcPhase,
+                                uint32_t bootCount,
+                                uint32_t abnormalResetCount,
+                                uint32_t freeHeap,
+                                uint32_t minFreeHeap);
+  static void publishDiagnosticEvent(const char* eventText);
+  static void publishDiagnosticDetail(const char* key, const char* value);
 
 private:
   static void connectIfNeeded();

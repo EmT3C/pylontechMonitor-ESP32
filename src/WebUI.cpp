@@ -14,7 +14,7 @@ static dailyEnergyData*    s_energy = nullptr;
 static statDebugData*      s_statDbg = nullptr;
 static char*               s_rawBuf = nullptr;
 static size_t              s_rawLen = 0;
-static circular_log<7000>* s_log    = nullptr;
+static circular_log<16384>* s_log    = nullptr;
 static bool                s_cmdBusy = false;
 static unsigned long       s_lastCmdMs = 0;
 
@@ -46,8 +46,7 @@ static bool commandNeedsPrompt(const char* cmd) {
          startsWithIgnoreCase(cmd, "stat") ||
          startsWithIgnoreCase(cmd, "log") ||
          startsWithIgnoreCase(cmd, "bat") ||
-         startsWithIgnoreCase(cmd, "data") ||
-         startsWithIgnoreCase(cmd, "datalist");
+         startsWithIgnoreCase(cmd, "data");
 }
 
 static void sendJsonDocument(JsonDocument& doc) {
@@ -307,7 +306,7 @@ void WebUI::init(WebServer* server,
                  statDebugData* statDbg,
                  char* rawBuf,
                  size_t rawBufLen,
-                 circular_log<7000>* clog)
+                 circular_log<16384>* clog)
 {
   s_server = server;
   s_link   = link;
@@ -318,11 +317,6 @@ void WebUI::init(WebServer* server,
   s_rawBuf = rawBuf;
   s_rawLen = rawBufLen;
   s_log    = clog;
-
-  s_server->on("/log", HTTP_GET, []() {
-    if (s_log) s_server->send(200, "text/html", s_log->c_str());
-    else       s_server->send(200, "text/plain", "(no log)");
-  });
 
   s_server->on("/api/stack", HTTP_GET, []() {
     sendJsonStack();
@@ -372,6 +366,13 @@ void WebUI::init(WebServer* server,
       s_server->send(413, "text/plain", "command too long");
       return;
     }
+    for (int i = 0; i < (int)code.length(); i++) {
+      unsigned char c = (unsigned char)code[i];
+      if (c < 0x20 || c > 0x7E) {
+        s_server->send(400, "text/plain", "invalid characters");
+        return;
+      }
+    }
     if (!tryBeginCommand()) {
       s_server->send(429, "text/plain", "busy");
       return;
@@ -384,6 +385,7 @@ void WebUI::init(WebServer* server,
 
     memset(s_rawBuf, 0, s_rawLen);
 
+    const unsigned long cmdT0 = millis();
     bool ok = false;
     if (commandNeedsPrompt(code.c_str())) {
       ok = s_link->sendAndReceivePrompt(code.c_str(), s_rawBuf, s_rawLen, 20000);
@@ -392,10 +394,20 @@ void WebUI::init(WebServer* server,
     }
     endCommand();
 
+    if (s_log) {
+      char msg[64];
+      snprintf(msg, sizeof(msg), "CMD done: %s %lums", ok ? "ok" : "timeout", millis() - cmdT0);
+      s_log->Log(msg);
+    }
+
     if (!ok) {
       s_server->send(504, "text/plain", "timeout");
       return;
     }
+
+    char* p = strstr(s_rawBuf, "pylon_debug>");
+    if (!p) p = strstr(s_rawBuf, "pylon>");
+    if (p) *p = '\0';
 
     s_server->sendHeader("Cache-Control", "no-store");
     s_server->send(200, "text/plain", s_rawBuf);
@@ -419,6 +431,13 @@ void WebUI::init(WebServer* server,
     if (code.length() > 64) {
       s_server->send(413, "text/plain", "command too long");
       return;
+    }
+    for (int i = 0; i < (int)code.length(); i++) {
+      unsigned char c = (unsigned char)code[i];
+      if (c < 0x20 || c > 0x7E) {
+        s_server->send(400, "text/plain", "invalid characters");
+        return;
+      }
     }
     if (!tryBeginCommand()) {
       s_server->send(429, "text/plain", "busy");

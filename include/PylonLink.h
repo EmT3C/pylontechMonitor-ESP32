@@ -12,7 +12,7 @@ public:
   bool sendAndReceivePrompt(const char* cmd, char* outBuf, size_t bufSize, unsigned long timeoutMs=12000);
 
   int  available() const;
-  void logIncoming(circular_log<7000>* log);
+  void logIncoming(circular_log<16384>* log);
   bool isBusy() const { return m_busy; }
 
 private:

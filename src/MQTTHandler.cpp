@@ -3,6 +3,22 @@
 #include <ArduinoJson.h>
 #include <string.h>
 
+namespace {
+  void publishRetainedText(PubSubClient* client, const char* suffix, const char* payload) {
+    if (!client || !suffix || !payload) return;
+
+    char topic[160];
+    snprintf(topic, sizeof(topic), MQTT_TOPIC_ROOT "diag/%s", suffix);
+    client->publish(topic, payload, true);
+  }
+
+  void publishRetainedNumber(PubSubClient* client, const char* suffix, uint32_t value) {
+    char payload[24];
+    snprintf(payload, sizeof(payload), "%lu", (unsigned long)value);
+    publishRetainedText(client, suffix, payload);
+  }
+}
+
 PubSubClient* MQTTHandler::s_client        = nullptr;
 batteryStack* MQTTHandler::s_stack         = nullptr;
 systemData*   MQTTHandler::s_system        = nullptr;
@@ -71,7 +87,6 @@ void MQTTHandler::loop() {
 
 void MQTTHandler::publishIfConnected() {
   if (!s_client) return;
-  s_client->loop();
   if (!s_client->connected()) return;
 
   const unsigned long now = millis();
@@ -80,6 +95,8 @@ void MQTTHandler::publishIfConnected() {
   s_lastPublishMs = now;
 
   publishData();
+
+  if (!s_stack) return;
 
   long stackCellDeltaMax = 0;
 
@@ -419,4 +436,32 @@ void MQTTHandler::publishData() {
     snprintf(buf, sizeof(buf), "%.3f", s_system->sys_rec_dsg_current / 1000.0);
     s_client->publish(MQTT_TOPIC_ROOT "sys_rec_dsg_current", buf, true);
   }
+}
+
+void MQTTHandler::publishDiagnostic(const char* resetReason,
+                                    const char* savedPhase,
+                                    const char* rtcPhase,
+                                    uint32_t bootCount,
+                                    uint32_t abnormalResetCount,
+                                    uint32_t freeHeap,
+                                    uint32_t minFreeHeap) {
+  if (!s_client || !s_client->connected()) return;
+
+  publishRetainedText(s_client, "reset_reason", resetReason ? resetReason : "Unknown");
+  publishRetainedText(s_client, "saved_phase", savedPhase ? savedPhase : "Unknown");
+  publishRetainedText(s_client, "rtc_phase", rtcPhase ? rtcPhase : "Unknown");
+  publishRetainedNumber(s_client, "boot_count", bootCount);
+  publishRetainedNumber(s_client, "abnormal_resets", abnormalResetCount);
+  publishRetainedNumber(s_client, "free_heap", freeHeap);
+  publishRetainedNumber(s_client, "min_free_heap", minFreeHeap);
+}
+
+void MQTTHandler::publishDiagnosticEvent(const char* eventText) {
+  if (!s_client || !s_client->connected() || !eventText || !*eventText) return;
+  publishRetainedText(s_client, "last_event", eventText);
+}
+
+void MQTTHandler::publishDiagnosticDetail(const char* key, const char* value) {
+  if (!s_client || !s_client->connected() || !key || !*key || !value) return;
+  publishRetainedText(s_client, key, value);
 }

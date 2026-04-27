@@ -3,6 +3,31 @@
 #include <Arduino.h>  // millis, delay
 #include <ctype.h>    // tolower
 
+static bool responseHasPayload(const char* buf) {
+  if (!buf) return false;
+
+  const char* p = buf;
+  while (*p && isspace((unsigned char)*p)) ++p;
+  if (!*p) return false;
+
+  if (strncmp(p, "pylon>", 6) == 0) return false;
+  if (strncmp(p, "pylon_debug>", 12) == 0) return false;
+  if (*p == '>' && p[1] == '\0') return false;
+  return true;
+}
+
+static bool responseIsOnlyPrompt(const char* buf) {
+  if (!buf) return false;
+
+  const char* p = buf;
+  while (*p && isspace((unsigned char)*p)) ++p;
+  if (!*p) return true;
+
+  return (strncmp(p, "pylon>", 6) == 0) ||
+         (strncmp(p, "pylon_debug>", 12) == 0) ||
+         (*p == '>' && p[1] == '\0');
+}
+
 static inline void pushWindow(char* window, size_t capacity, size_t& len, char c) {
   if (capacity < 2) return;
 
@@ -55,23 +80,31 @@ bool BatteryLink::sendAndReceive(const char* cmd, char* outBuf, size_t bufSize, 
   if (!outBuf || bufSize == 0) return false;
   if (!lock(6000)) return false;
 
-  bool ok = false;                         // <— statt frühem return
-  port.flush();
-  wakeUpConsole();
+  bool ok = false;
+  for (int attempt = 0; attempt < 2 && !ok; ++attempt) {
+    outBuf[0] = '\0';
+    port.flush();
+    wakeUpConsole();
 
-  // Rx leeren, damit nur Antwort auf DIESEN Befehl kommt
-  while (port.available()) { port.read(); }
+    // Rx leeren, damit nur Antwort auf DIESEN Befehl kommt
+    while (port.available()) { port.read(); }
 
-  if (cmd && *cmd) port.print(cmd);
-  port.print('\n');
+    if (cmd && *cmd) port.print(cmd);
+    port.print('\n');
 
-  // Akzeptiere sowohl ">" als auch "pylon>" als Terminator
-  ok = (readUntil(outBuf, ">", bufSize, timeoutMs) > 0);
-  if (!ok && outBuf && outBuf[0] == '\0') {
-    ok = (readUntil(outBuf, "pylon>", bufSize, timeoutMs) > 0);
+    // Feste Poll-Kommandos sollen bis zum bekannten Prompt lesen und nicht schon
+    // bei einem einzelnen '>' abbrechen, sonst bleiben nur Prompt/Leerantworten uebrig.
+    const int n = readUntil(outBuf, nullptr, bufSize, timeoutMs);
+    ok = (n > 0) && responseHasPayload(outBuf);
+
+    if (!ok && responseIsOnlyPrompt(outBuf) && attempt == 0) {
+      delay(40);
+    } else {
+      break;
+    }
   }
 
-  unlock();                                // <— wird jetzt IMMER erreicht
+  unlock();
   return ok;
 }
 
@@ -80,18 +113,25 @@ bool BatteryLink::sendAndReceivePrompt(const char* cmd, char* outBuf, size_t buf
   if (!lock(6000)) return false;
 
   bool ok = false;
-  outBuf[0] = '\0';
-  port.flush();
+  for (int attempt = 0; attempt < 2 && !ok; ++attempt) {
+    outBuf[0] = '\0';
+    port.flush();
 
-  wakeUpConsole();
-  while (port.available()) { port.read(); }
+    wakeUpConsole();
+    while (port.available()) { port.read(); }
 
-  if (cmd && *cmd) port.print(cmd);
-  port.print('\n');
+    if (cmd && *cmd) port.print(cmd);
+    port.print('\n');
 
-  // kein fester Terminator, readUntil erkennt pylon> und pylon_debug> selbst
-  int n = readUntil(outBuf, nullptr, bufSize, timeoutMs);
-  ok = (n > 0);
+    // Kein fester Terminator, readUntil erkennt pylon> und pylon_debug> selbst.
+    int n = readUntil(outBuf, nullptr, bufSize, timeoutMs);
+    ok = (n > 0);
+
+    if (ok && responseIsOnlyPrompt(outBuf) && attempt == 0) {
+      ok = false;
+      delay(40);
+    }
+  }
 
   unlock();
   return ok;
@@ -102,7 +142,7 @@ int BatteryLink::available() const {
   return port.available();
 }
 
-void BatteryLink::logIncoming(circular_log<7000>* log) {
+void BatteryLink::logIncoming(circular_log<16384>* log) {
   if (!log) return;
   while (port.available()) {
     char c = (char)port.read();

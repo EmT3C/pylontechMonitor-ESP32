@@ -13,11 +13,11 @@
   #define strtok_r(s, delim, saveptr) strtok((s), (delim))
 #endif
 
-static circular_log<7000>* s_log = nullptr;
+static circular_log<16384>* s_log = nullptr;
 
 static void setBatteryAlarmText(pylonBattery& b);
 
-void Parser::init(circular_log<7000>* log) {
+void Parser::init(circular_log<16384>* log) {
   s_log = log;
 }
 
@@ -174,15 +174,14 @@ bool Parser::parsePwr(const char* in, batteryStack* out) {
 
     bool faultState = !subOk || b.isAlarm() || b.isProtect();
 
-    if (faultState)                  alarmCnt++;
-    else if (b.isBalancing())        out->anyBalancing = true;
-    else if (b.isCharging())         chargeCnt++;
-    else if (b.isDischarging())      dischargeCnt++;
-    else if (b.isIdle())             idleCnt++;
-
     if (b.isBalancing()) out->anyBalancing = true;
 
-    if (s_log) {
+    if (faultState)             alarmCnt++;
+    else if (b.isCharging())    chargeCnt++;
+    else if (b.isDischarging()) dischargeCnt++;
+    else if (b.isIdle())        idleCnt++;
+
+    if (s_log && !b.isNormal()) {
       char dbg[200];
       snprintf(dbg, sizeof(dbg),
                "PWR idx=%d V=%ldmV I=%ldmA T=%ldmC SoC=%ld%% base=%s Vst=%s Ist=%s Tst=%s BV=%s BT=%s",
@@ -262,6 +261,39 @@ static long readLongAfterMulti(const char* s, std::initializer_list<const char*>
   for (const char* lbl : labels) {
     long v = readLongAfter(s, lbl);
     if (v != LONG_MIN) return v;
+  }
+  return LONG_MIN;
+}
+
+// Wie readLongAfterMulti, aber überspringt Treffer die direkt von badPrefix eingeleitet werden.
+// Verhindert dass "Recommend chg voltage" den Wert von "system Recommend chg voltage" liest.
+static long readLongAfterExcluded(const char* s,
+                                   std::initializer_list<const char*> labels,
+                                   const char* badPrefix) {
+  const size_t badLen = badPrefix ? strlen(badPrefix) : 0;
+  for (const char* label : labels) {
+    const size_t llen = strlen(label);
+    const char* p = s;
+    while ((p = strstr(p, label)) != nullptr) {
+      if (badLen > 0 && (size_t)(p - s) >= badLen &&
+          memcmp(p - badLen, badPrefix, badLen) == 0) {
+        p += llen;
+        continue;
+      }
+      const char* q = strchr(p, ':');
+      if (!q) { p += llen; continue; }
+      ++q;
+      while (*q == ' ' || *q == '\t') ++q;
+      char num[32];
+      size_t n = 0;
+      if (*q == '+' || *q == '-') num[n++] = *q++;
+      while (isdigit((unsigned char)*q) && n < sizeof(num) - 1) num[n++] = *q++;
+      num[n] = 0;
+      if (n == 0 || (n == 1 && (num[0] == '+' || num[0] == '-'))) {
+        p += llen; continue;
+      }
+      return atol(num);
+    }
   }
   return LONG_MIN;
 }
@@ -406,43 +438,43 @@ bool Parser::parsePwrsys(const char* in, systemData* out) {
   }
 
   if ((v = readLongAfterMulti(in, {"system Recommend chg voltage"})) != LONG_MIN) {
-  out->sys_rec_chg_voltage = v;
-  matched++;
-}
+    out->sys_rec_chg_voltage = v;
+    matched++;
+  }
 
   if ((v = readLongAfterMulti(in, {"system Recommend dsg voltage"})) != LONG_MIN) {
-  out->sys_rec_dsg_voltage = v;
-  matched++;
+    out->sys_rec_dsg_voltage = v;
+    matched++;
   }
 
   if ((v = readLongAfterMulti(in, {"system Recommend chg current"})) != LONG_MIN) {
-  out->sys_rec_chg_current = v;
-  matched++;
+    out->sys_rec_chg_current = v;
+    matched++;
   }
 
   if ((v = readLongAfterMulti(in, {"system Recommend dsg current"})) != LONG_MIN) {
-  out->sys_rec_dsg_current = v;
-  matched++;
+    out->sys_rec_dsg_current = v;
+    matched++;
   }
 
-  if ((v = readLongAfterMulti(in, {"Recommend chg voltage"})) != LONG_MIN) {
-  out->rec_chg_voltage = v;
-  matched++;
+  if ((v = readLongAfterExcluded(in, {"Recommend chg voltage"}, "system ")) != LONG_MIN) {
+    out->rec_chg_voltage = v;
+    matched++;
   }
 
-  if ((v = readLongAfterMulti(in, {"Recommend dsg voltage"})) != LONG_MIN) {
-  out->rec_dsg_voltage = v;
-  matched++;
+  if ((v = readLongAfterExcluded(in, {"Recommend dsg voltage"}, "system ")) != LONG_MIN) {
+    out->rec_dsg_voltage = v;
+    matched++;
   }
 
-  if ((v = readLongAfterMulti(in, {"Recommend chg current"})) != LONG_MIN) {
-  out->rec_chg_current = v;
-  matched++;
+  if ((v = readLongAfterExcluded(in, {"Recommend chg current"}, "system ")) != LONG_MIN) {
+    out->rec_chg_current = v;
+    matched++;
   }
 
-  if ((v = readLongAfterMulti(in, {"Recommend dsg current"})) != LONG_MIN) {
-  out->rec_dsg_current = v;
-  matched++;
+  if ((v = readLongAfterExcluded(in, {"Recommend dsg current"}, "system ")) != LONG_MIN) {
+    out->rec_dsg_current = v;
+    matched++;
   }
 
   char stateBuf[16] = {0};

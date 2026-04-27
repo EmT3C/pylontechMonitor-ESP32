@@ -95,7 +95,7 @@ WebServer server(80);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, NTP_SERVER, GMT_OFFSET_SEC);
 
-circular_log<7000> g_log;
+circular_log<16384> g_log;
 
 // Polling-Kommandos laufen nacheinander und koennen sich daher einen Buffer teilen.
 char g_szRecvBuffPoll[16384];
@@ -111,8 +111,21 @@ BatteryLink batt(Serial2, PIN_RX2, PIN_TX2);
 
 RTC_DATA_ATTR uint32_t g_bootCount = 0;
 RTC_DATA_ATTR uint32_t g_abnormalResetCount = 0;
+RTC_DATA_ATTR uint8_t  g_lastPhaseRTC = 0;
 
 static esp_reset_reason_t g_resetReason = ESP_RST_UNKNOWN;
+
+enum class CrashPhase : uint8_t {
+  Unknown = 0,
+  Boot,
+  Loop,
+  PwrPoll,
+  PwrsysPoll,
+  StatPoll,
+  MqttLoop,
+  MqttPublish,
+  Roam
+};
 
 static const char* resetReasonToString(esp_reset_reason_t reason) {
   switch (reason) {
@@ -129,6 +142,151 @@ static const char* resetReasonToString(esp_reset_reason_t reason) {
     case ESP_RST_SDIO:      return "SDIO";
     default:                return "Invalid";
   }
+}
+
+static const char* crashPhaseToString(CrashPhase phase) {
+  switch (phase) {
+    case CrashPhase::Boot:      return "Boot";
+    case CrashPhase::Loop:      return "Loop";
+    case CrashPhase::PwrPoll:   return "PWR";
+    case CrashPhase::PwrsysPoll:return "PWRSYS";
+    case CrashPhase::StatPoll:   return "STAT";
+    case CrashPhase::MqttLoop:   return "MqttLoop";
+    case CrashPhase::MqttPublish:return "MqttPublish";
+    case CrashPhase::Roam:       return "Roam";
+    default:                     return "Unknown";
+  }
+}
+
+namespace CrashTrace {
+  static Preferences s_prefs;
+  static bool s_prefsOpen = false;
+  static unsigned long s_lastPersistMs = 0;
+  static CrashPhase s_lastSavedPhase = CrashPhase::Unknown;
+  static uint32_t s_lastSavedBootCount = 0;
+  static constexpr unsigned long kPersistIntervalMs = 300000UL;
+
+  static void begin() {
+    s_prefsOpen = s_prefs.begin("crash-trace", false);
+    if (!s_prefsOpen) return;
+    s_lastSavedPhase = static_cast<CrashPhase>(s_prefs.getUChar("phase", (uint8_t)CrashPhase::Unknown));
+    s_lastSavedBootCount = s_prefs.getULong("boot", 0);
+  }
+
+  static void persist(CrashPhase phase) {
+    if (!s_prefsOpen) return;
+    s_prefs.putUChar("phase", (uint8_t)phase);
+    s_prefs.putULong("boot", g_bootCount);
+    s_lastSavedPhase = phase;
+    s_lastSavedBootCount = g_bootCount;
+    s_lastPersistMs = millis();
+  }
+
+  static void mark(CrashPhase phase, bool forcePersist = false) {
+    g_lastPhaseRTC = (uint8_t)phase;
+    if (!s_prefsOpen) return;
+
+    const bool changed = s_lastSavedPhase != phase;
+    const bool bootChanged = s_lastSavedBootCount != g_bootCount;
+    const bool due = (millis() - s_lastPersistMs) >= kPersistIntervalMs;
+
+    // RTC-Daten reichen fuer die unmittelbare Crash-Phase; NVS nur sparsam
+    // beschreiben, damit Flash-Schreiblast und Loop-Blockaden klein bleiben.
+    if (bootChanged || (changed && (forcePersist || due))) {
+      persist(phase);
+    }
+  }
+
+  static const char* savedPhaseText() {
+    return crashPhaseToString(s_lastSavedPhase);
+  }
+
+  static const char* rtcPhaseText() {
+    return crashPhaseToString(static_cast<CrashPhase>(g_lastPhaseRTC));
+  }
+}
+
+static void publishMqttDiagnosticSnapshot(bool force = false) {
+#if ENABLE_MQTT
+  static unsigned long s_lastDiagPublishMs = 0;
+  const unsigned long now = millis();
+  if (!force && (now - s_lastDiagPublishMs) < 10000UL) return;
+
+  s_lastDiagPublishMs = now;
+  MQTTHandler::publishDiagnostic(resetReasonToString(g_resetReason),
+                                 CrashTrace::savedPhaseText(),
+                                 CrashTrace::rtcPhaseText(),
+                                 g_bootCount,
+                                 g_abnormalResetCount,
+                                 ESP.getFreeHeap(),
+                                 ESP.getMinFreeHeap());
+#else
+  (void)force;
+#endif
+}
+
+static void publishMqttDiagnosticEvent(const char* msg, bool forceSnapshot = false) {
+  if (!msg || !*msg) return;
+#if ENABLE_MQTT
+  MQTTHandler::publishDiagnosticEvent(msg);
+  publishMqttDiagnosticSnapshot(forceSnapshot);
+#else
+  (void)forceSnapshot;
+#endif
+}
+
+static void makeRxExcerpt(const char* src, char* out, size_t outSize) {
+  if (!out || outSize == 0) return;
+  out[0] = '\0';
+  if (!src) return;
+
+  size_t j = 0;
+  for (size_t i = 0; src[i] && j + 1 < outSize; ++i) {
+    unsigned char c = (unsigned char)src[i];
+    if (c == '\r' || c == '\n' || c == '\t') {
+      out[j++] = ' ';
+    } else if (c >= 0x20 && c <= 0x7E) {
+      out[j++] = (char)c;
+    } else {
+      out[j++] = '?';
+    }
+  }
+  out[j] = '\0';
+}
+
+static bool rxLooksLikePromptOnly(const char* src) {
+  if (!src) return false;
+
+  while (*src && isspace((unsigned char)*src)) ++src;
+  if (!*src) return true;
+
+  return (strncmp(src, "pylon>", 6) == 0) ||
+         (strncmp(src, "pylon_debug>", 12) == 0) ||
+         (*src == '>' && src[1] == '\0');
+}
+
+static void publishMqttDiagnosticFailure(const char* command,
+                                         const char* errorText,
+                                         const char* rxBuf = nullptr) {
+#if ENABLE_MQTT
+  char rxLen[24];
+  char rxExcerpt[192];
+
+  MQTTHandler::publishDiagnosticDetail("last_command", command ? command : "");
+  MQTTHandler::publishDiagnosticDetail("last_error", errorText ? errorText : "");
+
+  snprintf(rxLen, sizeof(rxLen), "%u", rxBuf ? (unsigned)strlen(rxBuf) : 0U);
+  MQTTHandler::publishDiagnosticDetail("last_rx_len", rxLen);
+
+  makeRxExcerpt(rxBuf, rxExcerpt, sizeof(rxExcerpt));
+  MQTTHandler::publishDiagnosticDetail("last_rx_excerpt", rxExcerpt);
+
+  publishMqttDiagnosticEvent(errorText ? errorText : "Unknown error", true);
+#else
+  (void)command;
+  (void)errorText;
+  (void)rxBuf;
+#endif
 }
 
 static bool isAbnormalReset(esp_reset_reason_t reason) {
@@ -263,7 +421,7 @@ namespace EnergyTracker {
 
 namespace StatRetry {
   static bool run(BatteryLink& link,
-                  circular_log<7000>& log,
+                  circular_log<16384>& log,
                   char* recvBuf,
                   size_t recvBufLen,
                   uint8_t statIdx,
@@ -295,6 +453,7 @@ namespace StatRetry {
                    : "STAT timeout idx=%u attempt=%d",
                  statIdx, attempt);
         log.Log(msg);
+        publishMqttDiagnosticFailure(statCmd, msg, recvBuf);
 
         if (attempt < maxAttempts) {
           delay(50);
@@ -308,6 +467,7 @@ namespace StatRetry {
                attempt < maxAttempts ? "got %s try %d" : "got %s",
                statCmd, attempt);
       log.Log(gotMsg);
+      publishMqttDiagnosticEvent(gotMsg);
 
       pylonBattery newBatt = stack.batts[statIdx - 1];
       if (Parser::parseStat(recvBuf, &newBatt)) {
@@ -327,6 +487,7 @@ namespace StatRetry {
                    : "STAT ok idx=%u cycleTimes=%ld",
                  statIdx, newBatt.cycleTimes);
         log.Log(okMsg);
+        publishMqttDiagnosticEvent(okMsg);
         return true;
       }
 
@@ -343,6 +504,7 @@ namespace StatRetry {
                  : "STAT parse failed idx=%u attempt=%d - keeping previous cycleTimes",
                statIdx, attempt);
       log.Log(failMsg);
+      publishMqttDiagnosticFailure(statCmd, failMsg, recvBuf);
 
       if (attempt < maxAttempts) {
         delay(50);
@@ -463,15 +625,21 @@ void setup() {
     g_abnormalResetCount++;
   }
 
+  CrashTrace::begin();
+  CrashTrace::mark(CrashPhase::Boot, true);
+
   {
-    char bootMsg[160];
+    char bootMsg[224];
     snprintf(bootMsg, sizeof(bootMsg),
-             "BOOT reset=%s bootCount=%lu abnormalResets=%lu",
+             "BOOT reset=%s bootCount=%lu abnormalResets=%lu savedPhase=%s rtcPhase=%s",
              resetReasonToString(g_resetReason),
              (unsigned long)g_bootCount,
-             (unsigned long)g_abnormalResetCount);
+             (unsigned long)g_abnormalResetCount,
+             CrashTrace::savedPhaseText(),
+             CrashTrace::rtcPhaseText());
     Serial.println(bootMsg);
     g_log.Log(bootMsg);
+    publishMqttDiagnosticEvent(bootMsg, true);
   }
 
   if (!LittleFS.begin(true)) {
@@ -568,9 +736,12 @@ void setup() {
     String s = "RSSI=" + String((WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0) +
                " dBm\nSleep=" + String(WiFi.getSleep() ? "on" : "off") +
                "\nHeap=" + String(ESP.getFreeHeap()) +
+               "\nMinFreeHeap=" + String(ESP.getMinFreeHeap()) +
                "\nReset=" + String(resetReasonToString(g_resetReason)) +
                "\nBootCount=" + String(g_bootCount) +
-               "\nAbnormalResets=" + String(g_abnormalResetCount);
+               "\nAbnormalResets=" + String(g_abnormalResetCount) +
+               "\nLastPhaseSaved=" + String(CrashTrace::savedPhaseText()) +
+               "\nLastPhaseRTC=" + String(CrashTrace::rtcPhaseText());
     server.send(200, "text/plain", s);
   });
 
@@ -598,13 +769,16 @@ void setup() {
 // Loop
 
 void loop() {
+  CrashTrace::mark(CrashPhase::Loop);
   ArduinoOTA.handle();
   server.handleClient();
   timeClient.update();
   EnergyTracker::update(g_dailyEnergy, g_stack, timeClient);
 
 #if ENABLE_MQTT
+  CrashTrace::mark(CrashPhase::MqttLoop);
   MQTTHandler::loop();
+  publishMqttDiagnosticSnapshot();
 #endif
 
   bool wifiOK = (WiFi.status() == WL_CONNECTED);
@@ -612,6 +786,30 @@ void loop() {
 #if ENABLE_MQTT
   mqttOK = mqttClient.connected();
 #endif
+
+  {
+    static bool s_lastWifi = false;
+    static bool s_lastMqtt = false;
+    if (wifiOK != s_lastWifi) {
+      s_lastWifi = wifiOK;
+      if (wifiOK) {
+        char msg[48];
+        snprintf(msg, sizeof(msg), "WiFi: connected RSSI=%d", WiFi.RSSI());
+        g_log.Log(msg);
+        publishMqttDiagnosticEvent(msg);
+      } else {
+        g_log.Log("WiFi: disconnected");
+        publishMqttDiagnosticEvent("WiFi: disconnected", true);
+      }
+    }
+#if ENABLE_MQTT
+    if (mqttOK != s_lastMqtt) {
+      s_lastMqtt = mqttOK;
+      g_log.Log(mqttOK ? "MQTT: connected" : "MQTT: disconnected");
+      publishMqttDiagnosticEvent(mqttOK ? "MQTT: connected" : "MQTT: disconnected", true);
+    }
+#endif
+  }
 
   bool alarm = (strcmp(g_stack.baseState, "Alarm!") == 0) ||
                (strcmp(g_systemStack.alarmState, "Alarm") == 0);
@@ -627,15 +825,27 @@ void loop() {
   static uint32_t lastPollPwr = 0;
   if (millis() - lastPollPwr >= 2000UL) {
     lastPollPwr = millis();
+    CrashTrace::mark(CrashPhase::PwrPoll);
 
     memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
+    const unsigned long pwrT0 = millis();
     if (batt.sendAndReceive("pwr", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), 4000)) {
+      const unsigned long pwrMs = millis() - pwrT0;
       batteryStack parsedStack = g_stack;
       if (Parser::parsePwr(g_szRecvBuffPoll, &parsedStack)) {
         if (StackGuard::shouldAcceptParsedStack(g_stack, parsedStack)) {
+          const bool stateChanged = strcmp(g_stack.baseState, parsedStack.baseState) != 0
+                                 || g_stack.batteryCount != parsedStack.batteryCount;
           batteryStack previousStack = g_stack;
           g_stack = parsedStack;
           StackGuard::markAccepted(previousStack, parsedStack);
+          if (stateChanged || pwrMs > 2000) {
+            char msg[80];
+            snprintf(msg, sizeof(msg), "PWR %dbats state=%s SoC=%d%% %lums",
+                     g_stack.batteryCount, g_stack.baseState, g_stack.soc, pwrMs);
+            g_log.Log(msg);
+            publishMqttDiagnosticEvent(msg);
+          }
         } else {
           char msg[96];
           snprintf(msg, sizeof(msg),
@@ -644,12 +854,17 @@ void loop() {
                    parsedStack.batteryCount,
                    StackGuard::missingCycles());
           g_log.Log(msg);
+          publishMqttDiagnosticEvent(msg, true);
         }
       } else {
         g_log.Log("PWR parse failed - keeping previous values");
+        publishMqttDiagnosticFailure("pwr", "PWR parse failed - keeping previous values", g_szRecvBuffPoll);
       }
     } else {
-      g_log.Log("PWR timeout - keeping previous values");
+      char msg[48];
+      snprintf(msg, sizeof(msg), "PWR timeout after %lums", millis() - pwrT0);
+      g_log.Log(msg);
+      publishMqttDiagnosticFailure("pwr", msg, g_szRecvBuffPoll);
     }
   }
 
@@ -657,19 +872,50 @@ void loop() {
   // pwrsys langsamer pollen
   // ---------------------------
   static uint32_t lastPollPwrsys = 0;
-  if (millis() - lastPollPwrsys >= 15000UL) {
+  const bool chargeSuppressed =
+    g_systemStack.valid &&
+    g_systemStack.soc >= 99 &&
+    g_systemStack.rec_chg_current == 0 &&
+    g_systemStack.sys_rec_chg_current == 0;
+  const unsigned long pwrsysPollInterval = chargeSuppressed ? 300000UL : 15000UL;
+  const unsigned long pwrsysTimeoutMs = chargeSuppressed ? 5000UL : 6000UL;
+
+  if (millis() - lastPollPwrsys >= pwrsysPollInterval) {
     lastPollPwrsys = millis();
+    CrashTrace::mark(CrashPhase::PwrsysPoll);
 
     memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
-    if (batt.sendAndReceive("pwrsys", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), 6000)) {
+    const unsigned long pwrsysT0 = millis();
+    if (batt.sendAndReceive("pwrsys", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), pwrsysTimeoutMs)) {
+      const unsigned long pwrsysMs = millis() - pwrsysT0;
       systemData parsedSystem = g_systemStack;
       if (Parser::parsePwrsys(g_szRecvBuffPoll, &parsedSystem)) {
         g_systemStack = parsedSystem;
+        if (pwrsysMs > 3000) {
+          char msg[48];
+          snprintf(msg, sizeof(msg), "PWRSYS slow: %lums", pwrsysMs);
+          g_log.Log(msg);
+          publishMqttDiagnosticEvent(msg);
+        }
       } else {
-        g_log.Log("PWRSYS parse failed - keeping previous values");
+        if (chargeSuppressed && rxLooksLikePromptOnly(g_szRecvBuffPoll)) {
+          g_log.Log("PWRSYS prompt-only in idle/full - keeping previous values");
+          publishMqttDiagnosticEvent("PWRSYS prompt-only in idle/full - keeping previous values");
+        } else {
+          g_log.Log("PWRSYS parse failed - keeping previous values");
+          publishMqttDiagnosticFailure("pwrsys", "PWRSYS parse failed - keeping previous values", g_szRecvBuffPoll);
+        }
       }
     } else {
-      g_log.Log("PWRSYS timeout - keeping previous values");
+      if (chargeSuppressed && rxLooksLikePromptOnly(g_szRecvBuffPoll)) {
+        g_log.Log("PWRSYS prompt-only timeout in idle/full - keeping previous values");
+        publishMqttDiagnosticEvent("PWRSYS prompt-only timeout in idle/full - keeping previous values");
+      } else {
+        char msg[48];
+        snprintf(msg, sizeof(msg), "PWRSYS timeout after %lums", millis() - pwrsysT0);
+        g_log.Log(msg);
+        publishMqttDiagnosticFailure("pwrsys", msg, g_szRecvBuffPoll);
+      }
     }
   }
 
@@ -694,6 +940,7 @@ if (millis() - statBootDelayStart >= statBootDelayMs) {
 
   if (lastPollStat == 0 || (millis() - lastPollStat >= statInterval)) {
     lastPollStat = millis();
+    CrashTrace::mark(CrashPhase::StatPoll);
 
     int highestPresentIdx = 0;
     for (int i = 0; i < MAX_PYLON_BATTERIES; ++i) {
@@ -729,6 +976,7 @@ if (millis() - statBootDelayStart >= statBootDelayMs) {
                statIdx, maxBat, statInitialRun ? "yes" : "no",
                g_stack.batteryCount, highestPresentIdx);
       g_log.Log(dbg);
+      publishMqttDiagnosticEvent(dbg);
     }
 
     StatRetry::run(batt,
@@ -747,6 +995,7 @@ if (millis() - statBootDelayStart >= statBootDelayMs) {
       if (statInitialRun) {
         statInitialRun = false;
         g_log.Log("initial stat round completed");
+        publishMqttDiagnosticEvent("initial stat round completed");
       }
     }
 
@@ -756,8 +1005,10 @@ if (millis() - statBootDelayStart >= statBootDelayMs) {
 }
 
 #if ENABLE_MQTT
+  CrashTrace::mark(CrashPhase::MqttPublish);
   MQTTHandler::publishIfConnected();
 #endif
 
+  CrashTrace::mark(CrashPhase::Roam);
   roamIfNeeded(WIFI_SSID, WIFI_PASS);
 }
