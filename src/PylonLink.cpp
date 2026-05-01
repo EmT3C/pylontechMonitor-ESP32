@@ -3,29 +3,50 @@
 #include <Arduino.h>  // millis, delay
 #include <ctype.h>    // tolower
 
+static bool tokenMatchesPromptSuffix(const char* token, size_t len, const char* prompt) {
+  if (!token || !prompt || len == 0) return false;
+
+  const size_t promptLen = strlen(prompt);
+  if (len > promptLen) return false;
+
+  return memcmp(token, prompt + (promptLen - len), len) == 0;
+}
+
+static bool responseIsPromptOnlyLike(const char* buf) {
+  if (!buf) return false;
+
+  const char* p = buf;
+
+  while (*p) {
+    while (*p && isspace((unsigned char)*p)) ++p;
+    if (!*p) break;
+
+    const char* tokenStart = p;
+    while (*p && !isspace((unsigned char)*p)) ++p;
+    const size_t tokenLen = (size_t)(p - tokenStart);
+    if (tokenLen == 0) continue;
+
+    if (!(tokenMatchesPromptSuffix(tokenStart, tokenLen, "pylon>") ||
+          tokenMatchesPromptSuffix(tokenStart, tokenLen, "pylon_debug>") ||
+          (tokenLen == 1 && tokenStart[0] == '>'))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 static bool responseHasPayload(const char* buf) {
   if (!buf) return false;
 
   const char* p = buf;
   while (*p && isspace((unsigned char)*p)) ++p;
   if (!*p) return false;
-
-  if (strncmp(p, "pylon>", 6) == 0) return false;
-  if (strncmp(p, "pylon_debug>", 12) == 0) return false;
-  if (*p == '>' && p[1] == '\0') return false;
-  return true;
+  return !responseIsPromptOnlyLike(p);
 }
 
 static bool responseIsOnlyPrompt(const char* buf) {
-  if (!buf) return false;
-
-  const char* p = buf;
-  while (*p && isspace((unsigned char)*p)) ++p;
-  if (!*p) return true;
-
-  return (strncmp(p, "pylon>", 6) == 0) ||
-         (strncmp(p, "pylon_debug>", 12) == 0) ||
-         (*p == '>' && p[1] == '\0');
+  return responseIsPromptOnlyLike(buf);
 }
 
 static inline void pushWindow(char* window, size_t capacity, size_t& len, char c) {

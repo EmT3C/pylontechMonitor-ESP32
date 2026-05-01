@@ -254,15 +254,35 @@ static void makeRxExcerpt(const char* src, char* out, size_t outSize) {
   out[j] = '\0';
 }
 
+static bool tokenMatchesPromptSuffix(const char* token, size_t len, const char* prompt) {
+  if (!token || !prompt || len == 0) return false;
+
+  const size_t promptLen = strlen(prompt);
+  if (len > promptLen) return false;
+
+  return memcmp(token, prompt + (promptLen - len), len) == 0;
+}
+
 static bool rxLooksLikePromptOnly(const char* src) {
   if (!src) return false;
 
-  while (*src && isspace((unsigned char)*src)) ++src;
-  if (!*src) return true;
+  while (*src) {
+    while (*src && isspace((unsigned char)*src)) ++src;
+    if (!*src) break;
 
-  return (strncmp(src, "pylon>", 6) == 0) ||
-         (strncmp(src, "pylon_debug>", 12) == 0) ||
-         (*src == '>' && src[1] == '\0');
+    const char* tokenStart = src;
+    while (*src && !isspace((unsigned char)*src)) ++src;
+    const size_t tokenLen = (size_t)(src - tokenStart);
+    if (tokenLen == 0) continue;
+
+    if (!(tokenMatchesPromptSuffix(tokenStart, tokenLen, "pylon>") ||
+          tokenMatchesPromptSuffix(tokenStart, tokenLen, "pylon_debug>") ||
+          (tokenLen == 1 && tokenStart[0] == '>'))) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 static void publishMqttDiagnosticFailure(const char* command,
