@@ -41,6 +41,9 @@
     .foot{margin-top:10px;color:var(--muted);font-size:12px}
     .section-title{margin:0 0 10px;font-size:15px}
     .subgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+    .diag-box{margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#0b1220}
+    .diag-box .line{font-size:13px;line-height:1.45;margin-top:6px;word-break:break-word}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   </style>
 </head>
 <body>
@@ -123,6 +126,24 @@
 
   <section class="subgrid" style="margin-top:12px">
     <div class="card">
+      <h3 class="section-title">Stabilitaet</h3>
+      <div class="row"><span class="muted">Status</span><span id="healthPill" class="pill">–</span></div>
+      <div class="row"><span class="muted">Uptime</span><span id="diagUptime">–</span></div>
+      <div class="row"><span class="muted">Boot Count</span><span id="diagBootCount">–</span></div>
+      <div class="row"><span class="muted">Abnormal Resets</span><span id="diagAbnormalResets">–</span></div>
+      <div class="row"><span class="muted">Reset Reason</span><span id="diagResetReason">–</span></div>
+      <div class="row"><span class="muted">Saved / RTC Phase</span><span id="diagPhases">–</span></div>
+      <div class="row"><span class="muted">Heap / Min</span><span id="diagHeap">–</span></div>
+      <div class="row"><span class="muted">WiFi</span><span id="diagWifi">–</span></div>
+      <div class="diag-box">
+        <div class="line"><span class="muted">Letztes Event:</span> <span id="diagLastEvent">–</span></div>
+        <div class="line"><span class="muted">Letzter Fehler:</span> <span id="diagLastError">–</span></div>
+        <div class="line"><span class="muted">Kommando / RX:</span> <span id="diagLastCmd">–</span></div>
+        <div class="line mono" id="diagLastRx">–</div>
+      </div>
+    </div>
+
+    <div class="card">
       <h3 class="section-title">System</h3>
       <div class="row"><span class="muted">System-Status</span><span id="sysState">–</span></div>
       <div class="row"><span class="muted">Alarmstatus</span><span id="sysAlarm">–</span></div>
@@ -134,7 +155,6 @@
       <div class="row"><span class="muted">FCC</span><span id="fcc">– mAh</span></div>
       <div class="row"><span class="muted">Laden heute</span><span id="chargeTodayDetail">– kWh</span></div>
       <div class="row"><span class="muted">Entladen heute</span><span id="dischargeTodayDetail">– kWh</span></div>
-      <div class="row"><span class="muted">Diag</span><span id="diag">–</span></div>
       <div class="row" style="margin-top:10px">
         <button id="restartBtn" class="btn" style="background:#ef4444" onclick="restartEsp()">ESP neu starten</button>
       </div>
@@ -231,6 +251,24 @@ function estAC(pdc){
   }
 }
 
+function formatDuration(ms){
+  if (!isFinite(ms) || ms < 0) return '–';
+  const total = Math.floor(ms / 1000);
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+function setHealthPill(txt, mode){
+  const el = $('#healthPill');
+  el.textContent = txt;
+  el.className = 'pill';
+  if (mode) el.classList.add(mode);
+}
+
 async function fetchJson(url){
   const r = await fetch(url, { cache: 'no-store' });
   if (!r.ok) throw new Error(url + ': ' + r.status);
@@ -324,10 +362,42 @@ function renderStatDebug(d){
     : (d.lastTimedOut ? 'timeout' : (d.lastParseFailed ? 'parse failed' : '–'));
 }
 
+function renderDiag(d){
+  const hasError = !!(d.lastError && d.lastError.trim());
+  const hasAbnormal = Number(d.abnormalResets || 0) > 0;
+  const resetReason = d.resetReason || '–';
+
+  let healthText = 'Stabil';
+  let healthMode = 'ok';
+  if (hasAbnormal || /panic|brownout|wdt/i.test(resetReason)) {
+    healthText = 'Auffaellig';
+    healthMode = 'bad';
+  } else if (hasError) {
+    healthText = 'Beobachten';
+    healthMode = 'warn';
+  }
+  setHealthPill(healthText, healthMode);
+
+  $('#diagUptime').textContent = formatDuration(d.uptimeMs);
+  $('#diagBootCount').textContent = fmt(d.bootCount, 0);
+  $('#diagAbnormalResets').textContent = fmt(d.abnormalResets, 0);
+  $('#diagResetReason').textContent = resetReason;
+  $('#diagPhases').textContent = `${d.savedPhase || '–'} / ${d.rtcPhase || '–'}`;
+  $('#diagHeap').textContent = `${fmt(d.freeHeap, 0)} / ${fmt(d.minFreeHeap, 0)}`;
+  $('#diagWifi').textContent = d.wifiConnected
+    ? `verbunden (${fmt(d.wifiRssi, 0)} dBm)`
+    : 'getrennt';
+  $('#diagLastEvent').textContent = d.lastEvent || '–';
+  $('#diagLastError').textContent = d.lastError || '–';
+  $('#diagLastCmd').textContent = d.lastCommand
+    ? `${d.lastCommand} / ${fmt(d.lastRxLen, 0)} Bytes`
+    : '–';
+  $('#diagLastRx').textContent = d.lastRxExcerpt || '–';
+}
+
 let statusFailures = 0;
 let stackInFlight = false;
 let systemInFlight = false;
-let lastDiagText = '–';
 let diagFailures = 0;
 
 function markOnline(){
@@ -382,16 +452,14 @@ async function refreshStatDebug(){
 
 async function refreshDiag(){
   try{
-    const r = await fetch('/diag', { cache: 'no-store' });
-    if (!r.ok) throw new Error('/diag: ' + r.status);
-    lastDiagText = (await r.text()).replace(/\n/g, ' | ');
+    const d = await fetchJson('/api/diag');
     diagFailures = 0;
-    $('#diag').textContent = lastDiagText;
+    renderDiag(d);
   }catch(e){
     diagFailures++;
-    $('#diag').textContent = diagFailures >= 2
-      ? lastDiagText + ' | Diag veraltet'
-      : lastDiagText;
+    if (diagFailures >= 2) {
+      setHealthPill('Offline', 'bad');
+    }
   }
 }
 

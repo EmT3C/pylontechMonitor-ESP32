@@ -8,6 +8,7 @@
 #include <WebServer.h>
 #include <NTPClient.h>
 #include <Preferences.h>
+#include <ArduinoJson.h>
 #include <circular_log.h>
 #include <esp_wifi.h>
 #include <esp_system.h>
@@ -114,6 +115,12 @@ RTC_DATA_ATTR uint32_t g_abnormalResetCount = 0;
 RTC_DATA_ATTR uint8_t  g_lastPhaseRTC = 0;
 
 static esp_reset_reason_t g_resetReason = ESP_RST_UNKNOWN;
+static char g_diagLastEvent[160] = "";
+static char g_diagLastCommand[32] = "";
+static char g_diagLastError[160] = "";
+static char g_diagLastRxExcerpt[192] = "";
+static uint32_t g_diagLastRxLen = 0;
+static unsigned long g_diagLastFailureMs = 0;
 
 enum class CrashPhase : uint8_t {
   Unknown = 0,
@@ -227,6 +234,8 @@ static void publishMqttDiagnosticSnapshot(bool force = false) {
 
 static void publishMqttDiagnosticEvent(const char* msg, bool forceSnapshot = false) {
   if (!msg || !*msg) return;
+  strncpy(g_diagLastEvent, msg, sizeof(g_diagLastEvent) - 1);
+  g_diagLastEvent[sizeof(g_diagLastEvent) - 1] = 0;
 #if ENABLE_MQTT
   MQTTHandler::publishDiagnosticEvent(msg);
   publishMqttDiagnosticSnapshot(forceSnapshot);
@@ -344,6 +353,13 @@ static bool rxLooksLikePwrPayload(const char* src) {
 static void publishMqttDiagnosticFailure(const char* command,
                                          const char* errorText,
                                          const char* rxBuf = nullptr) {
+  strncpy(g_diagLastCommand, command ? command : "", sizeof(g_diagLastCommand) - 1);
+  g_diagLastCommand[sizeof(g_diagLastCommand) - 1] = 0;
+  strncpy(g_diagLastError, errorText ? errorText : "", sizeof(g_diagLastError) - 1);
+  g_diagLastError[sizeof(g_diagLastError) - 1] = 0;
+  g_diagLastRxLen = rxBuf ? (uint32_t)strlen(rxBuf) : 0U;
+  makeRxExcerpt(rxBuf, g_diagLastRxExcerpt, sizeof(g_diagLastRxExcerpt));
+  g_diagLastFailureMs = millis();
 #if ENABLE_MQTT
   char rxLen[24];
   char rxExcerpt[192];
@@ -351,10 +367,11 @@ static void publishMqttDiagnosticFailure(const char* command,
   MQTTHandler::publishDiagnosticDetail("last_command", command ? command : "");
   MQTTHandler::publishDiagnosticDetail("last_error", errorText ? errorText : "");
 
-  snprintf(rxLen, sizeof(rxLen), "%u", rxBuf ? (unsigned)strlen(rxBuf) : 0U);
+  snprintf(rxLen, sizeof(rxLen), "%u", (unsigned)g_diagLastRxLen);
   MQTTHandler::publishDiagnosticDetail("last_rx_len", rxLen);
 
-  makeRxExcerpt(rxBuf, rxExcerpt, sizeof(rxExcerpt));
+  strncpy(rxExcerpt, g_diagLastRxExcerpt, sizeof(rxExcerpt) - 1);
+  rxExcerpt[sizeof(rxExcerpt) - 1] = 0;
   MQTTHandler::publishDiagnosticDetail("last_rx_excerpt", rxExcerpt);
 
   publishMqttDiagnosticEvent(errorText ? errorText : "Unknown error", true);
@@ -819,6 +836,32 @@ void setup() {
                "\nLastPhaseSaved=" + String(CrashTrace::savedPhaseText()) +
                "\nLastPhaseRTC=" + String(CrashTrace::rtcPhaseText());
     server.send(200, "text/plain", s);
+  });
+
+  server.on("/api/diag", []() {
+    StaticJsonDocument<1536> doc;
+    doc["resetReason"] = resetReasonToString(g_resetReason);
+    doc["savedPhase"] = CrashTrace::savedPhaseText();
+    doc["rtcPhase"] = CrashTrace::rtcPhaseText();
+    doc["bootCount"] = g_bootCount;
+    doc["abnormalResets"] = g_abnormalResetCount;
+    doc["freeHeap"] = ESP.getFreeHeap();
+    doc["minFreeHeap"] = ESP.getMinFreeHeap();
+    doc["uptimeMs"] = millis();
+    doc["wifiConnected"] = (WiFi.status() == WL_CONNECTED);
+    doc["wifiRssi"] = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
+    doc["lastEvent"] = g_diagLastEvent;
+    doc["lastCommand"] = g_diagLastCommand;
+    doc["lastError"] = g_diagLastError;
+    doc["lastRxLen"] = g_diagLastRxLen;
+    doc["lastRxExcerpt"] = g_diagLastRxExcerpt;
+    doc["lastFailureMs"] = g_diagLastFailureMs;
+
+    String out;
+    out.reserve(measureJson(doc) + 1);
+    serializeJson(doc, out);
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", out);
   });
 
   server.on("/log", []() {
