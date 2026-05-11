@@ -263,6 +263,22 @@ static bool tokenMatchesPromptSuffix(const char* token, size_t len, const char* 
   return memcmp(token, prompt + (promptLen - len), len) == 0;
 }
 
+static bool textContainsIgnoreCase(const char* text, const char* needle) {
+  if (!text || !needle || !*needle) return false;
+
+  const size_t needleLen = strlen(needle);
+  for (const char* p = text; *p; ++p) {
+    size_t i = 0;
+    while (i < needleLen &&
+           p[i] &&
+           tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])) {
+      ++i;
+    }
+    if (i == needleLen) return true;
+  }
+  return false;
+}
+
 static bool rxLooksLikePromptOnly(const char* src) {
   if (!src) return false;
 
@@ -283,6 +299,46 @@ static bool rxLooksLikePromptOnly(const char* src) {
   }
 
   return true;
+}
+
+static bool rxLooksLikePwrsysPayload(const char* src) {
+  return src &&
+         (textContainsIgnoreCase(src, "System SOC") ||
+          textContainsIgnoreCase(src, "System Curr") ||
+          textContainsIgnoreCase(src, "System FCC"));
+}
+
+static bool rxLooksLikePwrPayload(const char* src) {
+  if (!src) return false;
+
+  const char* p = src;
+  while (*p) {
+    while (*p == '\r' || *p == '\n') ++p;
+    if (!*p) break;
+
+    const char* lineStart = p;
+    while (*p == ' ' || *p == '\t') ++p;
+
+    int idx = 0;
+    int digits = 0;
+    while (isdigit((unsigned char)*p) && digits < 3) {
+      idx = idx * 10 + (*p - '0');
+      ++p;
+      ++digits;
+    }
+
+    if (digits > 0 &&
+        idx >= 1 &&
+        idx <= MAX_PYLON_BATTERIES &&
+        (*p == ' ' || *p == '\t') &&
+        strchr(lineStart, '%')) {
+      return true;
+    }
+
+    while (*p && *p != '\r' && *p != '\n') ++p;
+  }
+
+  return false;
 }
 
 static void publishMqttDiagnosticFailure(const char* command,
@@ -847,9 +903,18 @@ void loop() {
     lastPollPwr = millis();
     CrashTrace::mark(CrashPhase::PwrPoll);
 
-    memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
     const unsigned long pwrT0 = millis();
-    if (batt.sendAndReceive("pwr", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), 4000)) {
+    bool pwrHandled = false;
+    for (int attempt = 1; attempt <= 2 && !pwrHandled; ++attempt) {
+      memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
+      if (!batt.sendAndReceive("pwr", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), 4000)) {
+        char msg[48];
+        snprintf(msg, sizeof(msg), "PWR timeout after %lums", millis() - pwrT0);
+        g_log.Log(msg);
+        publishMqttDiagnosticFailure("pwr", msg, g_szRecvBuffPoll);
+        break;
+      }
+
       const unsigned long pwrMs = millis() - pwrT0;
       batteryStack parsedStack = g_stack;
       if (Parser::parsePwr(g_szRecvBuffPoll, &parsedStack)) {
@@ -876,15 +941,20 @@ void loop() {
           g_log.Log(msg);
           publishMqttDiagnosticEvent(msg, true);
         }
-      } else {
-        g_log.Log("PWR parse failed - keeping previous values");
-        publishMqttDiagnosticFailure("pwr", "PWR parse failed - keeping previous values", g_szRecvBuffPoll);
+        pwrHandled = true;
+        continue;
       }
-    } else {
-      char msg[48];
-      snprintf(msg, sizeof(msg), "PWR timeout after %lums", millis() - pwrT0);
-      g_log.Log(msg);
-      publishMqttDiagnosticFailure("pwr", msg, g_szRecvBuffPoll);
+
+      if (attempt == 1 && rxLooksLikePwrsysPayload(g_szRecvBuffPoll)) {
+        g_log.Log("PWR got PWRSYS payload - retrying");
+        publishMqttDiagnosticEvent("PWR got PWRSYS payload - retrying", true);
+        delay(80);
+        continue;
+      }
+
+      g_log.Log("PWR parse failed - keeping previous values");
+      publishMqttDiagnosticFailure("pwr", "PWR parse failed - keeping previous values", g_szRecvBuffPoll);
+      break;
     }
   }
 
@@ -904,9 +974,23 @@ void loop() {
     lastPollPwrsys = millis();
     CrashTrace::mark(CrashPhase::PwrsysPoll);
 
-    memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
     const unsigned long pwrsysT0 = millis();
-    if (batt.sendAndReceive("pwrsys", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), pwrsysTimeoutMs)) {
+    bool pwrsysHandled = false;
+    for (int attempt = 1; attempt <= 2 && !pwrsysHandled; ++attempt) {
+      memset(g_szRecvBuffPoll, 0, sizeof(g_szRecvBuffPoll));
+      if (!batt.sendAndReceive("pwrsys", g_szRecvBuffPoll, sizeof(g_szRecvBuffPoll), pwrsysTimeoutMs)) {
+        if (chargeSuppressed && rxLooksLikePromptOnly(g_szRecvBuffPoll)) {
+          g_log.Log("PWRSYS prompt-only timeout in idle/full - keeping previous values");
+          publishMqttDiagnosticEvent("PWRSYS prompt-only timeout in idle/full - keeping previous values");
+        } else {
+          char msg[48];
+          snprintf(msg, sizeof(msg), "PWRSYS timeout after %lums", millis() - pwrsysT0);
+          g_log.Log(msg);
+          publishMqttDiagnosticFailure("pwrsys", msg, g_szRecvBuffPoll);
+        }
+        break;
+      }
+
       const unsigned long pwrsysMs = millis() - pwrsysT0;
       systemData parsedSystem = g_systemStack;
       if (Parser::parsePwrsys(g_szRecvBuffPoll, &parsedSystem)) {
@@ -917,25 +1001,25 @@ void loop() {
           g_log.Log(msg);
           publishMqttDiagnosticEvent(msg);
         }
-      } else {
-        if (chargeSuppressed && rxLooksLikePromptOnly(g_szRecvBuffPoll)) {
-          g_log.Log("PWRSYS prompt-only in idle/full - keeping previous values");
-          publishMqttDiagnosticEvent("PWRSYS prompt-only in idle/full - keeping previous values");
-        } else {
-          g_log.Log("PWRSYS parse failed - keeping previous values");
-          publishMqttDiagnosticFailure("pwrsys", "PWRSYS parse failed - keeping previous values", g_szRecvBuffPoll);
-        }
+        pwrsysHandled = true;
+        continue;
       }
-    } else {
+
+      if (attempt == 1 && rxLooksLikePwrPayload(g_szRecvBuffPoll)) {
+        g_log.Log("PWRSYS got PWR payload - retrying");
+        publishMqttDiagnosticEvent("PWRSYS got PWR payload - retrying", true);
+        delay(80);
+        continue;
+      }
+
       if (chargeSuppressed && rxLooksLikePromptOnly(g_szRecvBuffPoll)) {
-        g_log.Log("PWRSYS prompt-only timeout in idle/full - keeping previous values");
-        publishMqttDiagnosticEvent("PWRSYS prompt-only timeout in idle/full - keeping previous values");
+        g_log.Log("PWRSYS prompt-only in idle/full - keeping previous values");
+        publishMqttDiagnosticEvent("PWRSYS prompt-only in idle/full - keeping previous values");
       } else {
-        char msg[48];
-        snprintf(msg, sizeof(msg), "PWRSYS timeout after %lums", millis() - pwrsysT0);
-        g_log.Log(msg);
-        publishMqttDiagnosticFailure("pwrsys", msg, g_szRecvBuffPoll);
+        g_log.Log("PWRSYS parse failed - keeping previous values");
+        publishMqttDiagnosticFailure("pwrsys", "PWRSYS parse failed - keeping previous values", g_szRecvBuffPoll);
       }
+      break;
     }
   }
 
