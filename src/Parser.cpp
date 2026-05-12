@@ -58,6 +58,71 @@ static const char* findRow(const char* in, int idx) {
   return nullptr;
 }
 
+static bool isDateToken(const char* s) {
+  if (!s) return false;
+  return strlen(s) == 10 &&
+         isdigit((unsigned char)s[0]) &&
+         isdigit((unsigned char)s[1]) &&
+         isdigit((unsigned char)s[2]) &&
+         isdigit((unsigned char)s[3]) &&
+         s[4] == '-' &&
+         isdigit((unsigned char)s[5]) &&
+         isdigit((unsigned char)s[6]) &&
+         s[7] == '-' &&
+         isdigit((unsigned char)s[8]) &&
+         isdigit((unsigned char)s[9]);
+}
+
+static bool isTimeToken(const char* s) {
+  if (!s) return false;
+  return strlen(s) == 8 &&
+         isdigit((unsigned char)s[0]) &&
+         isdigit((unsigned char)s[1]) &&
+         s[2] == ':' &&
+         isdigit((unsigned char)s[3]) &&
+         isdigit((unsigned char)s[4]) &&
+         s[5] == ':' &&
+         isdigit((unsigned char)s[6]) &&
+         isdigit((unsigned char)s[7]);
+}
+
+static bool tokenHasPercentNumber(const char* s) {
+  if (!s || !*s) return false;
+  const char* pct = strchr(s, '%');
+  if (!pct || pct == s) return false;
+  for (const char* p = s; p < pct; ++p) {
+    if (!isdigit((unsigned char)*p) && *p != '+' && *p != '-') return false;
+  }
+  return true;
+}
+
+static bool isBaseStateToken(const char* s) {
+  return s &&
+         (strcmp(s, "Charge") == 0 ||
+          strcmp(s, "Dischg") == 0 ||
+          strcmp(s, "Idle") == 0 ||
+          strcmp(s, "Balance") == 0 ||
+          strcmp(s, "Protect") == 0 ||
+          strcmp(s, "Alarm") == 0 ||
+          strcmp(s, "Alarm!") == 0);
+}
+
+static bool isSubStateToken(const char* s) {
+  return s &&
+         (strcmp(s, "Normal") == 0 ||
+          strcmp(s, "Protect") == 0 ||
+          strcmp(s, "Alarm") == 0 ||
+          strcmp(s, "Alarm!") == 0 ||
+          strcmp(s, "Absent") == 0 ||
+          strcmp(s, "Below") == 0 ||
+          strcmp(s, "Above") == 0 ||
+          strcmp(s, "Low") == 0 ||
+          strcmp(s, "High") == 0 ||
+          strcmp(s, "Under") == 0 ||
+          strcmp(s, "Over") == 0 ||
+          strcmp(s, "-") == 0);
+}
+
 bool Parser::parsePwr(const char* in, batteryStack* out) {
   if (!in || !out) return false;
 
@@ -117,8 +182,17 @@ bool Parser::parsePwr(const char* in, batteryStack* out) {
       t = strtok_r(nullptr, " \t", &save);
     }
 
-    if (tokCount < 16) continue;
+    if (tokCount < 3) continue;
     if (!isNum(tokens[0]) || !isNum(tokens[1]) || !isNum(tokens[2])) continue;
+
+    int socIdx = -1;
+    for (int i = 3; i < tokCount; ++i) {
+      if (tokenHasPercentNumber(tokens[i])) {
+        socIdx = i;
+        break;
+      }
+    }
+    if (socIdx < 0) continue;
 
     pylonBattery& b = out->batts[idx - 1];
     long savedCycleTimes = b.cycleTimes;
@@ -134,25 +208,54 @@ bool Parser::parsePwr(const char* in, batteryStack* out) {
     b.cellVoltLow  = (tokCount > 7  && isNum(tokens[7])) ? atoli(tokens[7]) : 0;
     b.cellVoltHigh = (tokCount > 9  && isNum(tokens[9])) ? atoli(tokens[9]) : 0;
 
-    strncpy(b.baseState,    (tokCount > 11 ? tokens[11] : "Unknown"), sizeof(b.baseState) - 1);
-    strncpy(b.voltageState, (tokCount > 12 ? tokens[12] : "Unknown"), sizeof(b.voltageState) - 1);
-    strncpy(b.currentState, (tokCount > 13 ? tokens[13] : "Unknown"), sizeof(b.currentState) - 1);
-    strncpy(b.tempState,    (tokCount > 14 ? tokens[14] : "Unknown"), sizeof(b.tempState) - 1);
-
-    if (tokCount > 15) {
-      char socBuf[16];
-      strncpy(socBuf, tokens[15], sizeof(socBuf) - 1);
-      socBuf[sizeof(socBuf) - 1] = 0;
-      char* pct = strchr(socBuf, '%');
-      if (pct) *pct = 0;
-      b.soc = atol(socBuf);
-    }
-
+    strcpy(b.baseState, (b.current > 200) ? "Charge" : ((b.current < -200) ? "Dischg" : "Idle"));
+    strcpy(b.voltageState, "Normal");
+    strcpy(b.currentState, "Normal");
+    strcpy(b.tempState, "Normal");
     strcpy(b.b_v_st, "Normal");
     strcpy(b.b_t_st, "Normal");
 
-    if (tokCount > 18) strncpy(b.b_v_st, tokens[18], sizeof(b.b_v_st) - 1);
-    if (tokCount > 19) strncpy(b.b_t_st, tokens[19], sizeof(b.b_t_st) - 1);
+    char socBuf[16];
+    strncpy(socBuf, tokens[socIdx], sizeof(socBuf) - 1);
+    socBuf[sizeof(socBuf) - 1] = 0;
+    char* pct = strchr(socBuf, '%');
+    if (pct) *pct = 0;
+    b.soc = atol(socBuf);
+
+    int subStateWrite = 2;
+    for (int i = socIdx - 1; i >= 0; --i) {
+      if (isBaseStateToken(tokens[i])) {
+        strncpy(b.baseState, tokens[i], sizeof(b.baseState) - 1);
+        break;
+      }
+      if (isSubStateToken(tokens[i]) && strcmp(tokens[i], "-") != 0) {
+        if (subStateWrite == 2) {
+          strncpy(b.tempState, tokens[i], sizeof(b.tempState) - 1);
+          subStateWrite--;
+        } else if (subStateWrite == 1) {
+          strncpy(b.currentState, tokens[i], sizeof(b.currentState) - 1);
+          subStateWrite--;
+        } else if (subStateWrite == 0) {
+          strncpy(b.voltageState, tokens[i], sizeof(b.voltageState) - 1);
+          break;
+        }
+      }
+    }
+
+    int postStateCount = 0;
+    for (int i = socIdx + 1; i < tokCount; ++i) {
+      if (isDateToken(tokens[i]) || isTimeToken(tokens[i]) || isNum(tokens[i])) continue;
+      if (strcmp(tokens[i], "-") == 0) continue;
+      if (!isSubStateToken(tokens[i]) && !isBaseStateToken(tokens[i])) continue;
+
+      if (postStateCount == 0) {
+        strncpy(b.b_v_st, tokens[i], sizeof(b.b_v_st) - 1);
+      } else if (postStateCount == 1) {
+        strncpy(b.b_t_st, tokens[i], sizeof(b.b_t_st) - 1);
+        break;
+      }
+      postStateCount++;
+    }
 
     b.balancing = b.isBalancing();
     setBatteryAlarmText(b);

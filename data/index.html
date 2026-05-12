@@ -44,6 +44,9 @@
     .diag-box{margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#0b1220}
     .diag-box .line{font-size:13px;line-height:1.45;margin-top:6px;word-break:break-word}
     .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .pair{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+    .subcard{padding:10px;border:1px solid var(--line);border-radius:10px;background:#0b1220}
+    .subcard h4{margin:0 0 10px;font-size:13px;color:var(--muted)}
   </style>
 </head>
 <body>
@@ -126,24 +129,6 @@
 
   <section class="subgrid" style="margin-top:12px">
     <div class="card">
-      <h3 class="section-title">Stabilitaet</h3>
-      <div class="row"><span class="muted">Status</span><span id="healthPill" class="pill">–</span></div>
-      <div class="row"><span class="muted">Uptime</span><span id="diagUptime">–</span></div>
-      <div class="row"><span class="muted">Boot Count</span><span id="diagBootCount">–</span></div>
-      <div class="row"><span class="muted">Abnormal Resets</span><span id="diagAbnormalResets">–</span></div>
-      <div class="row"><span class="muted">Reset Reason</span><span id="diagResetReason">–</span></div>
-      <div class="row"><span class="muted">Saved / RTC Phase</span><span id="diagPhases">–</span></div>
-      <div class="row"><span class="muted">Heap / Min</span><span id="diagHeap">–</span></div>
-      <div class="row"><span class="muted">WiFi</span><span id="diagWifi">–</span></div>
-      <div class="diag-box">
-        <div class="line"><span class="muted">Letztes Event:</span> <span id="diagLastEvent">–</span></div>
-        <div class="line"><span class="muted">Letzter Fehler:</span> <span id="diagLastError">–</span></div>
-        <div class="line"><span class="muted">Kommando / RX:</span> <span id="diagLastCmd">–</span></div>
-        <div class="line mono" id="diagLastRx">–</div>
-      </div>
-    </div>
-
-    <div class="card">
       <h3 class="section-title">System</h3>
       <div class="row"><span class="muted">System-Status</span><span id="sysState">–</span></div>
       <div class="row"><span class="muted">Alarmstatus</span><span id="sysAlarm">–</span></div>
@@ -161,19 +146,41 @@
     </div>
 
     <div class="card">
-      <h3 class="section-title">Empfohlene Werte (BMS)</h3>
-      <div class="row"><span class="muted">Ladespannung</span><span id="recChgVoltage">– V</span></div>
-      <div class="row"><span class="muted">Entladespannung</span><span id="recDsgVoltage">– V</span></div>
-      <div class="row"><span class="muted">Ladestrom</span><span id="recChgCurrent">– A</span></div>
-      <div class="row"><span class="muted">Entladestrom</span><span id="recDsgCurrent">– A</span></div>
+      <h3 class="section-title">Empfohlene Werte</h3>
+      <div class="pair">
+        <div class="subcard">
+          <h4>BMS</h4>
+          <div class="row"><span class="muted">Ladespannung</span><span id="recChgVoltage">– V</span></div>
+          <div class="row"><span class="muted">Entladespannung</span><span id="recDsgVoltage">– V</span></div>
+          <div class="row"><span class="muted">Ladestrom</span><span id="recChgCurrent">– A</span></div>
+          <div class="row"><span class="muted">Entladestrom</span><span id="recDsgCurrent">– A</span></div>
+        </div>
+        <div class="subcard">
+          <h4>System</h4>
+          <div class="row"><span class="muted">Ladespannung</span><span id="sysRecChgVoltage">– V</span></div>
+          <div class="row"><span class="muted">Entladespannung</span><span id="sysRecDsgVoltage">– V</span></div>
+          <div class="row"><span class="muted">Ladestrom</span><span id="sysRecChgCurrent">– A</span></div>
+          <div class="row"><span class="muted">Entladestrom</span><span id="sysRecDsgCurrent">– A</span></div>
+        </div>
+      </div>
     </div>
 
     <div class="card">
-      <h3 class="section-title">Empfohlene Werte (System)</h3>
-      <div class="row"><span class="muted">Ladespannung</span><span id="sysRecChgVoltage">– V</span></div>
-      <div class="row"><span class="muted">Entladespannung</span><span id="sysRecDsgVoltage">– V</span></div>
-      <div class="row"><span class="muted">Ladestrom</span><span id="sysRecChgCurrent">– A</span></div>
-      <div class="row"><span class="muted">Entladestrom</span><span id="sysRecDsgCurrent">– A</span></div>
+      <h3 class="section-title">Stabilitaet</h3>
+      <div class="row"><span class="muted">Status</span><span id="healthPill" class="pill">–</span></div>
+      <div class="row"><span class="muted">Uptime</span><span id="diagUptime">–</span></div>
+      <div class="row"><span class="muted">Boot Count</span><span id="diagBootCount">–</span></div>
+      <div class="row"><span class="muted">Abnormal Resets</span><span id="diagAbnormalResets">–</span></div>
+      <div class="row"><span class="muted">Reset Reason</span><span id="diagResetReason">–</span></div>
+      <div class="row"><span class="muted">Saved / RTC Phase</span><span id="diagPhases">–</span></div>
+      <div class="row"><span class="muted">Heap / Min</span><span id="diagHeap">–</span></div>
+      <div class="row"><span class="muted">WiFi</span><span id="diagWifi">–</span></div>
+      <div class="diag-box">
+        <div class="line"><span class="muted">Letztes Event:</span> <span id="diagLastEvent">–</span></div>
+        <div class="line"><span class="muted">Letzter Fehler:</span> <span id="diagLastError">–</span></div>
+        <div class="line"><span class="muted">Kommando / RX:</span> <span id="diagLastCmd">–</span></div>
+        <div class="line mono" id="diagLastRx">–</div>
+      </div>
     </div>
 
     <div class="card">
