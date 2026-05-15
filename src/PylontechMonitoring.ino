@@ -121,6 +121,8 @@ static char g_diagLastError[160] = "";
 static char g_diagLastRxExcerpt[192] = "";
 static uint32_t g_diagLastRxLen = 0;
 static unsigned long g_diagLastFailureMs = 0;
+static char g_diagLastSuccessCommand[32] = "";
+static unsigned long g_diagLastSuccessMs = 0;
 
 enum class CrashPhase : uint8_t {
   Unknown = 0,
@@ -379,6 +381,26 @@ static void publishMqttDiagnosticFailure(const char* command,
   (void)command;
   (void)errorText;
   (void)rxBuf;
+#endif
+}
+
+static void clearMqttDiagnosticFailure(const char* command) {
+  strncpy(g_diagLastCommand, command ? command : "", sizeof(g_diagLastCommand) - 1);
+  g_diagLastCommand[sizeof(g_diagLastCommand) - 1] = 0;
+  strncpy(g_diagLastSuccessCommand, command ? command : "", sizeof(g_diagLastSuccessCommand) - 1);
+  g_diagLastSuccessCommand[sizeof(g_diagLastSuccessCommand) - 1] = 0;
+  g_diagLastError[0] = '\0';
+  g_diagLastRxExcerpt[0] = '\0';
+  g_diagLastRxLen = 0;
+  g_diagLastSuccessMs = millis();
+
+#if ENABLE_MQTT
+  MQTTHandler::publishDiagnosticDetail("last_command", command ? command : "");
+  MQTTHandler::publishDiagnosticDetail("last_error", "");
+  MQTTHandler::publishDiagnosticDetail("last_rx_len", "0");
+  MQTTHandler::publishDiagnosticDetail("last_rx_excerpt", "");
+#else
+  (void)command;
 #endif
 }
 
@@ -856,6 +878,8 @@ void setup() {
     doc["lastRxLen"] = g_diagLastRxLen;
     doc["lastRxExcerpt"] = g_diagLastRxExcerpt;
     doc["lastFailureMs"] = g_diagLastFailureMs;
+    doc["lastSuccessCommand"] = g_diagLastSuccessCommand;
+    doc["lastSuccessMs"] = g_diagLastSuccessMs;
 
     String out;
     out.reserve(measureJson(doc) + 1);
@@ -961,6 +985,7 @@ void loop() {
       const unsigned long pwrMs = millis() - pwrT0;
       batteryStack parsedStack = g_stack;
       if (Parser::parsePwr(g_szRecvBuffPoll, &parsedStack)) {
+        clearMqttDiagnosticFailure("pwr");
         if (StackGuard::shouldAcceptParsedStack(g_stack, parsedStack)) {
           const bool stateChanged = strcmp(g_stack.baseState, parsedStack.baseState) != 0
                                  || g_stack.batteryCount != parsedStack.batteryCount;
@@ -1037,6 +1062,7 @@ void loop() {
       const unsigned long pwrsysMs = millis() - pwrsysT0;
       systemData parsedSystem = g_systemStack;
       if (Parser::parsePwrsys(g_szRecvBuffPoll, &parsedSystem)) {
+        clearMqttDiagnosticFailure("pwrsys");
         g_systemStack = parsedSystem;
         if (pwrsysMs > 3000) {
           char msg[48];

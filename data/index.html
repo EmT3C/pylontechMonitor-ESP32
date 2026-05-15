@@ -173,6 +173,7 @@
       <div class="row"><span class="muted">Abnormal Resets</span><span id="diagAbnormalResets">–</span></div>
       <div class="row"><span class="muted">Reset Reason</span><span id="diagResetReason">–</span></div>
       <div class="row"><span class="muted">Saved / RTC Phase</span><span id="diagPhases">–</span></div>
+      <div class="row"><span class="muted">Letzter Erfolg</span><span id="diagLastSuccess">–</span></div>
       <div class="row"><span class="muted">Heap / Min</span><span id="diagHeap">–</span></div>
       <div class="row"><span class="muted">WiFi</span><span id="diagWifi">–</span></div>
       <div class="diag-box">
@@ -371,6 +372,9 @@ function renderStatDebug(d){
 
 function renderDiag(d){
   const hasError = !!(d.lastError && d.lastError.trim());
+  const lastFailureMs = Number(d.lastFailureMs || 0);
+  const lastSuccessMs = Number(d.lastSuccessMs || 0);
+  const errorIsCurrent = hasError && (!lastSuccessMs || lastFailureMs >= lastSuccessMs);
   const hasAbnormal = Number(d.abnormalResets || 0) > 0;
   const resetReason = d.resetReason || '–';
 
@@ -379,9 +383,12 @@ function renderDiag(d){
   if (hasAbnormal || /panic|brownout|wdt/i.test(resetReason)) {
     healthText = 'Auffaellig';
     healthMode = 'bad';
-  } else if (hasError) {
+  } else if (errorIsCurrent) {
     healthText = 'Beobachten';
     healthMode = 'warn';
+  } else if (hasError) {
+    healthText = 'Historischer Fehler';
+    healthMode = 'ok';
   }
   setHealthPill(healthText, healthMode);
 
@@ -390,12 +397,17 @@ function renderDiag(d){
   $('#diagAbnormalResets').textContent = fmt(d.abnormalResets, 0);
   $('#diagResetReason').textContent = resetReason;
   $('#diagPhases').textContent = `${d.savedPhase || '–'} / ${d.rtcPhase || '–'}`;
+  $('#diagLastSuccess').textContent = d.lastSuccessCommand
+    ? `${d.lastSuccessCommand} @ ${formatDuration(lastSuccessMs)}`
+    : '–';
   $('#diagHeap').textContent = `${fmt(d.freeHeap, 0)} / ${fmt(d.minFreeHeap, 0)}`;
   $('#diagWifi').textContent = d.wifiConnected
     ? `verbunden (${fmt(d.wifiRssi, 0)} dBm)`
     : 'getrennt';
   $('#diagLastEvent').textContent = d.lastEvent || '–';
-  $('#diagLastError').textContent = d.lastError || '–';
+  $('#diagLastError').textContent = hasError
+    ? `${d.lastError}${errorIsCurrent ? '' : ' (historisch)'}`
+    : '–';
   $('#diagLastCmd').textContent = d.lastCommand
     ? `${d.lastCommand} / ${fmt(d.lastRxLen, 0)} Bytes`
     : '–';
